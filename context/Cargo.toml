@@ -1,0 +1,11 @@
+[package]
+edition = "2021"
+name = "unico-context"
+version = "0.1.0"
+
+[features]
+boost = ["dep:cc"]
+default = ["boost"]
+
+[build-dependencies]
+cc = {version = "1.0", optional = true}
