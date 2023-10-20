@@ -18,9 +18,18 @@ cfg_if::cfg_if! {
 
 use core::{alloc::Layout, ptr::NonNull};
 
+/// The transfer structure between contexts.
 #[repr(C)]
 pub struct Transfer<T> {
+    /// The target context to be resumed.
     pub context: T,
+    /// The data passed between contexts.
+    ///
+    /// If the user passes the transfer structure to [`Context::resume`], the
+    /// data will be transferred to the target context.
+    ///
+    /// If the user gets the transfer structure from [`Context::resume`] or in
+    /// the entry function, the data is received from its resumer.
     pub data: *mut (),
 }
 
@@ -32,8 +41,8 @@ pub type Map<C> = extern "C" fn(t: Transfer<C>) -> Transfer<C>;
 /// # Safety
 ///
 /// `Context` must have a proper lifetime bound to a specific stack returned by
-/// [`Yield::new_on`].
-pub unsafe trait Yield {
+/// [`Context::new_on`].
+pub unsafe trait Context {
     /// The context reference bound to a specfic stack.
     type Context: 'static;
 
