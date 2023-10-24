@@ -1,12 +1,11 @@
 use core::{
     alloc::Layout,
     intrinsics::{abort, atomic_cxchg_acqrel_acquire},
-    mem::ManuallyDrop,
     ptr::{self, NonNull},
     sync::atomic::AtomicU8,
 };
 
-use unico_context::{Context, Transfer};
+use unico_context::{Resume, Transfer};
 
 use crate::{layout::extend, Co, NewError, RawStack};
 
@@ -17,40 +16,42 @@ const STARTED: u8 = 1;
 /// The function has been consumed.
 const FINISHED: u8 = 3;
 
-pub(crate) struct Header<C: Context> {
-    pub(crate) vtable: &'static VTable<C::Context>,
+pub(crate) struct Header<R: Resume> {
     state: AtomicU8,
-    stack: RawStack,
-    cx: C,
-}
-
-pub(crate) struct VTable<T> {
-    pub(crate) resume: unsafe fn(Transfer<T>) -> Transfer<T>,
-    pub(crate) drop: unsafe fn(ptr: *mut ()),
+    rs: R,
 }
 
 struct Layouts {
     layout: Layout,
     offset_func: usize,
+    offset_stack: usize,
 }
 
-pub(crate) struct RawCo<F, C: Context> {
-    header: *mut Header<C>,
+pub(crate) struct RawCo<F, R: Resume> {
+    header: *mut Header<R>,
     func: *mut F,
+    stack: *mut RawStack,
 }
 
-impl<F, C: Context> RawCo<F, C> {
+impl<F, R: Resume> RawCo<F, R> {
     const fn eval_layouts() -> Option<Layouts> {
-        let header = Layout::new::<Header<C>>();
+        let header = Layout::new::<Header<R>>();
         let func = Layout::new::<F>();
+        let stack = Layout::new::<RawStack>();
 
-        let (layout, offset_func) = match extend(header, func) {
+        let layout = header;
+        let (layout, offset_func) = match extend(layout, func) {
+            Some(union) => union,
+            None => return None,
+        };
+        let (layout, offset_stack) = match extend(layout, stack) {
             Some(union) => union,
             None => return None,
         };
         Some(Layouts {
             layout,
             offset_func,
+            offset_stack,
         })
     }
 
@@ -68,6 +69,7 @@ impl<F, C: Context> RawCo<F, C> {
         RawCo {
             header: ptr.cast(),
             func: ptr.map_addr(|addr| addr + layouts.offset_func).cast(),
+            stack: ptr.map_addr(|addr| addr + layouts.offset_stack).cast(),
         }
     }
 
@@ -77,16 +79,16 @@ impl<F, C: Context> RawCo<F, C> {
     }
 }
 
-impl<F, C> RawCo<F, C>
+impl<F, R> RawCo<F, R>
 where
-    F: FnOnce(Co<C>) -> Co<C>,
-    C: Context,
+    F: FnOnce(Co<R>) -> Co<R>,
+    R: Resume,
 {
     pub(crate) fn new_on(
         stack: RawStack,
-        cx: C,
+        rs: &R,
         func: F,
-    ) -> Result<Transfer<C::Context>, NewError<C>> {
+    ) -> Result<R::Context, NewError<R>> {
         let layouts = Self::layouts();
         let stack_layout = stack.layout();
         if stack_layout.size() <= layouts.layout.size()
@@ -110,7 +112,7 @@ where
         };
 
         let context = unsafe {
-            cx.new_on(
+            rs.new_on(
                 NonNull::slice_from_raw_parts(stack.base(), rest_size),
                 Self::entry,
             )
@@ -121,66 +123,61 @@ where
         unsafe {
             raw.header.write(Header {
                 state: AtomicU8::new(INITIALIZED),
-                vtable: Self::VTABLE,
-                stack,
-                cx,
+                rs: rs.clone(),
             });
             raw.func.write(func);
+            raw.stack.write(stack);
         }
 
-        Ok(Transfer {
-            context,
+        let initial = Transfer {
+            context: Some(context),
             data: pointer,
-        })
+        };
+        Ok(unsafe { rs.resume(initial) }.context.unwrap())
     }
 }
 
-impl<F, C> RawCo<F, C>
+impl<F, R> RawCo<F, R>
 where
-    F: FnOnce(Co<C>) -> Co<C>,
-    C: Context,
+    F: FnOnce(Co<R>) -> Co<R>,
+    R: Resume,
 {
-    extern "C" fn entry(t: Transfer<C::Context>) -> ! {
-        let task = Self::from_ptr(t.data);
+    #[allow(improper_ctypes_definitions)]
+    extern "C" fn entry(t: Transfer<R::Context>) -> ! {
+        let data = t.data;
+        let task = Self::from_ptr(data);
+
+        let rs = unsafe { (*task.header).rs.clone() };
+        let Transfer { context, .. } = unsafe { rs.resume(t) };
         unsafe {
             if task.update_state(INITIALIZED, STARTED) {
-                let ret = (task.func.read())(Co(ManuallyDrop::new(t)));
+                let Co { context, .. } = (task.func.read())(Co {
+                    context: context.unwrap(),
+                    rs,
+                });
 
                 task.update_state(STARTED, FINISHED);
 
-                (*task.header).cx.resume_with(ret.into_inner(), Self::exit);
+                let r#final = Transfer {
+                    context: Some(context),
+                    data,
+                };
+                (*task.header).rs.resume_with(r#final, Self::exit);
             }
         }
         abort()
     }
 
-    extern "C" fn exit(t: Transfer<C::Context>) -> Transfer<C::Context> {
+    #[allow(improper_ctypes_definitions)]
+    extern "C" fn exit(t: Transfer<R::Context>) -> Transfer<R::Context> {
         let task = Self::from_ptr(t.data);
-        unsafe { ptr::drop_in_place(ptr::addr_of_mut!((*task.header).stack)) }
+        unsafe {
+            ptr::drop_in_place(ptr::addr_of_mut!((*task.header).rs));
+            drop(task.stack.read())
+        }
         Transfer {
-            context: t.context,
+            context: None,
             data: ptr::null_mut(),
         }
     }
-}
-
-impl<F, C: Context> RawCo<F, C> {
-    unsafe fn resume(t: Transfer<C::Context>) -> Transfer<C::Context> {
-        let task = Self::from_ptr(t.data);
-        (*task.header).cx.resume(t)
-    }
-
-    unsafe fn drop(ptr: *mut ()) {
-        let task = Self::from_ptr(ptr);
-
-        if task.update_state(INITIALIZED, FINISHED) {
-            ptr::drop_in_place(task.func);
-        }
-        ptr::drop_in_place(ptr::addr_of_mut!((*task.header).stack));
-    }
-
-    const VTABLE: &'static VTable<C::Context> = &VTable {
-        resume: Self::resume,
-        drop: Self::drop,
-    };
 }

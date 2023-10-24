@@ -7,7 +7,7 @@ use std::{boxed::Box, io::Error as IoError};
 
 use libc::ucontext_t;
 
-use crate::{stack_top, Context, Entry, Map};
+use crate::{stack_top, Entry, Map, Resume};
 
 type Transfer = crate::Transfer<Ucx>;
 
@@ -34,10 +34,10 @@ struct LocalTransfer {
 impl From<LocalTransfer> for Transfer {
     fn from(value: LocalTransfer) -> Self {
         Self {
-            context: Ucx {
+            context: Some(Ucx {
                 pointer: value.from.unwrap(),
                 on_top: value.on_top,
-            },
+            }),
             data: value.data,
         }
     }
@@ -61,12 +61,13 @@ impl Ucx {
             IoError::last_os_error()
         );
         Ucx {
-            pointer: unsafe { NonNull::from(Box::leak(ret.assume_init())) },
+            pointer: NonNull::from(Box::leak(unsafe { ret.assume_init() })),
             on_top: None,
         }
     }
 
     unsafe fn new_on(stack: NonNull<[u8]>, entry: Entry<Ucx>) -> Result<Self, NewError> {
+        #[allow(improper_ctypes_definitions)]
         extern "C" fn wrapper(entry: Entry<Ucx>) {
             entry(TRANSFER.get().into());
         }
@@ -97,13 +98,16 @@ impl Ucx {
     }
 
     unsafe fn resume(t: Transfer) -> Transfer {
-        let target = t.context.pointer;
+        let Transfer { context, data } = t;
+        let context = context.unwrap();
+
+        let target = context.pointer;
         let src = TRANSFER.get().ucx;
         TRANSFER.set(LocalTransfer {
             from: Some(src),
-            ucx: t.context.pointer,
-            on_top: t.context.on_top,
-            data: t.data,
+            ucx: context.pointer,
+            on_top: context.on_top,
+            data,
         });
 
         let status = libc::swapcontext(src.as_ptr(), target.as_ptr());
@@ -115,7 +119,7 @@ impl Ucx {
         );
 
         let mut t: Transfer = TRANSFER.get().into();
-        match t.context.on_top.take() {
+        match t.context.as_mut().and_then(|c| c.on_top.take()) {
             Some(on_top) => on_top(t),
             None => t,
         }
@@ -132,7 +136,7 @@ pub enum NewError {
     GetContext(IoError),
 }
 
-unsafe impl Context for Ucontext {
+unsafe impl Resume for Ucontext {
     type Context = Ucx;
 
     type NewError = NewError;
@@ -154,7 +158,9 @@ unsafe impl Context for Ucontext {
         mut t: crate::Transfer<Ucx>,
         map: Map<Ucx>,
     ) -> crate::Transfer<Ucx> {
-        t.context.on_top = Some(map);
+        if let Some(c) = t.context.as_mut() {
+            c.on_top = Some(map);
+        }
         Ucx::resume(t)
     }
 }

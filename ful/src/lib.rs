@@ -8,67 +8,54 @@ mod layout;
 mod raw;
 pub mod stack;
 
-use core::{
-    alloc::Layout,
-    mem::{self, ManuallyDrop},
-};
+use core::{alloc::Layout, ptr};
 
-use unico_context::{Context, Transfer};
+use unico_context::{Resume, Transfer};
 
-use crate::{
-    raw::{Header, RawCo},
-    stack::RawStack,
-};
+use crate::{raw::RawCo, stack::RawStack};
 
 #[cfg(test)]
 extern crate alloc;
 
 #[derive(Debug)]
-pub enum NewError<C: Context> {
+pub enum NewError<R: Resume> {
     StackTooSmall { expected: Layout, actual: Layout },
-    Context(C::NewError),
+    Context(R::NewError),
 }
 
 #[derive(Debug)]
-pub struct Co<C: Context>(ManuallyDrop<Transfer<C::Context>>);
+pub struct Co<R: Resume> {
+    context: R::Context,
+    rs: R,
+}
 
-impl<C: Context> Co<C> {
+impl<R: Resume> Co<R> {
     pub fn new(
         stack: RawStack,
-        cx: C,
+        rs: R,
         func: impl FnOnce(Self) -> Self,
-    ) -> Result<Self, NewError<C>> {
-        RawCo::new_on(stack, cx, func).map(|cx| Co(ManuallyDrop::new(cx)))
-    }
-
-    fn into_inner(mut self) -> Transfer<C::Context> {
-        unsafe {
-            let ret = ManuallyDrop::take(&mut self.0);
-            mem::forget(self);
-            ret
-        }
+    ) -> Result<Self, NewError<R>> {
+        RawCo::new_on(stack, &rs, func).map(|context| Co { context, rs })
     }
 
     pub fn resume(self) -> Option<Self> {
-        let header = self.0.data.cast::<Header<C>>();
-        let t = unsafe { ((*header).vtable.resume)(self.into_inner()) };
-        (!t.data.is_null()).then(|| Co(ManuallyDrop::new(t)))
-    }
-}
-
-impl<C: Context> Drop for Co<C> {
-    fn drop(&mut self) {
-        let header = self.0.data.cast::<Header<C>>();
-        unsafe { ((*header).vtable.drop)(self.0.data) }
+        let Co { context, rs } = self;
+        let Transfer { context, .. } = unsafe {
+            rs.resume(Transfer {
+                context: Some(context),
+                data: ptr::null_mut(),
+            })
+        };
+        context.map(|context| Co { context, rs })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use alloc::alloc::{alloc, dealloc};
     use core::{convert::identity, ptr::NonNull};
+    use alloc::alloc::{alloc, dealloc};
 
-    use unico_context::{boost::Boost, ucx::Ucontext};
+    use unico_context::boost::Boost;
 
     use super::*;
 
@@ -132,8 +119,8 @@ mod tests {
 
     #[test]
     fn symmetric() {
-        let b = Co::new(raw_stack(), Ucontext, |a| {
-            let c = Co::new(raw_stack(), Ucontext, move |b| {
+        let b = Co::new(raw_stack(), Boost, |a| {
+            let c = Co::new(raw_stack(), Boost, move |b| {
                 let ret = b.resume();
                 assert!(ret.is_none());
                 a
