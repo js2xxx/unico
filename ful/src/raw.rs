@@ -40,14 +40,8 @@ impl<F, R: Resume> RawCo<F, R> {
         let stack = Layout::new::<RawStack>();
 
         let layout = header;
-        let (layout, offset_func) = match extend(layout, func) {
-            Some(union) => union,
-            None => return None,
-        };
-        let (layout, offset_stack) = match extend(layout, stack) {
-            Some(union) => union,
-            None => return None,
-        };
+        let (layout, offset_func) = ct!(extend(layout, func));
+        let (layout, offset_stack) = ct!(extend(layout, stack));
         Some(Layouts {
             layout,
             offset_func,

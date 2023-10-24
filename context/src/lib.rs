@@ -77,7 +77,8 @@ pub unsafe trait Resume: Clone {
     ///
     /// # Safety
     ///
-    /// `cx` must be bound to some valid stack.
+    /// `cx` must be bound to some valid stack, and the return value of `map`
+    /// must contains a possible valid [`Resume::Context`] wrapped in an option.
     unsafe fn resume_with(
         &self,
         cx: Self::Context,
@@ -92,7 +93,7 @@ fn layout_union(l1: Layout, l2: Layout) -> Layout {
     Layout::from_size_align(size, align).unwrap()
 }
 
-unsafe fn stack_top<T>(stack: NonNull<[u8]>) -> Option<NonNull<T>> {
+fn stack_top<T>(stack: NonNull<[u8]>) -> Option<NonNull<T>> {
     let layout = Layout::new::<T>();
 
     let ptr = stack.as_non_null_ptr();
