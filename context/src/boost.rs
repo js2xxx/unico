@@ -48,15 +48,11 @@ unsafe impl Resume for Boost {
         Ok(self::new_on(top, stack.len(), entry))
     }
 
-    /// See [`Resume::resume`] for the reason why we allow this clippy lint.
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    fn resume(&self, cx: Fcx, data: *mut ()) -> Transfer {
+    unsafe fn resume(&self, cx: Fcx, data: *mut ()) -> Transfer {
         unsafe { self::resume(cx, data) }
     }
 
-    /// See [`Resume::resume`] for the reason why we allow this clippy lint.
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    fn resume_with(&self, cx: Fcx, data: *mut (), map: Map<Fcx>) -> Transfer {
+    unsafe fn resume_with(&self, cx: Fcx, data: *mut (), map: Map<Fcx>) -> Transfer {
         unsafe { self::resume_with(cx, data, map) }
     }
 }

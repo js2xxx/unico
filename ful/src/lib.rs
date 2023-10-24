@@ -33,21 +33,21 @@ impl<R: Resume> Co<R> {
     pub fn new(
         stack: RawStack,
         rs: R,
-        func: impl FnOnce(Self) -> Self,
+        func: impl FnOnce(Option<Self>) -> Self,
     ) -> Result<Self, NewError<R>> {
         RawCo::new_on(stack, &rs, func).map(|context| Co { context, rs })
     }
 
     pub fn resume(self) -> Option<Self> {
         let Co { context, rs } = self;
-        let Transfer { context, .. } = rs.resume(context, ptr::null_mut());
+        let Transfer { context, .. } = unsafe { rs.resume(context, ptr::null_mut()) };
         context.map(|context| Co { context, rs })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use core::{convert::identity, ptr::NonNull};
+    use core::ptr::NonNull;
     use alloc::alloc::{alloc, dealloc};
 
     use unico_context::boost::Boost;
@@ -69,12 +69,12 @@ mod tests {
 
     #[test]
     fn creation() {
-        Co::new(raw_stack(), Boost, identity).unwrap();
+        Co::new(raw_stack(), Boost, Option::unwrap).unwrap();
     }
 
     #[test]
     fn empty() {
-        let co = Co::new(raw_stack(), Boost, identity).unwrap();
+        let co = Co::new(raw_stack(), Boost, Option::unwrap).unwrap();
         let ret = co.resume();
         assert!(ret.is_none());
     }
@@ -84,7 +84,7 @@ mod tests {
         let mut a = 0;
         let co = Co::new(raw_stack(), Boost, |co| {
             a = 1;
-            co
+            co.unwrap()
         })
         .unwrap();
         let ret = co.resume();
@@ -98,9 +98,9 @@ mod tests {
         let mut co = Co::new(raw_stack(), Boost, |mut co| {
             for _ in 0..10 {
                 counter += 1;
-                co = co.resume().unwrap();
+                co = co.unwrap().resume();
             }
-            co
+            co.unwrap()
         })
         .unwrap();
         loop {
@@ -116,12 +116,22 @@ mod tests {
     fn symmetric() {
         let b = Co::new(raw_stack(), Boost, |a| {
             let c = Co::new(raw_stack(), Boost, move |b| {
-                let ret = b.resume();
+                let ret = b.unwrap().resume();
                 assert!(ret.is_none());
-                a
+                a.unwrap()
             })
             .unwrap();
             c.resume().unwrap()
+        })
+        .unwrap();
+        let ret = b.resume();
+        assert!(ret.is_none());
+    }
+
+    #[test]
+    fn symmetric_direct() {
+        let b = Co::new(raw_stack(), Boost, |a| {
+            Co::new(raw_stack(), Boost, move |_| a.unwrap()).unwrap()
         })
         .unwrap();
         let ret = b.resume();

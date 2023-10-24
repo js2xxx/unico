@@ -81,7 +81,7 @@ impl<F, R: Resume> RawCo<F, R> {
 
 impl<F, R> RawCo<F, R>
 where
-    F: FnOnce(Co<R>) -> Co<R>,
+    F: FnOnce(Option<Co<R>>) -> Co<R>,
     R: Resume,
 {
     pub(crate) fn new_on(
@@ -129,26 +129,25 @@ where
             raw.stack.write(stack);
         }
 
-        Ok(rs.resume(context, pointer).context.unwrap())
+        let resume = unsafe { rs.resume(context, pointer) };
+        Ok(resume.context.unwrap())
     }
 }
 
 impl<F, R> RawCo<F, R>
 where
-    F: FnOnce(Co<R>) -> Co<R>,
+    F: FnOnce(Option<Co<R>>) -> Co<R>,
     R: Resume,
 {
     extern "C" fn entry(cx: R::Context, ptr: *mut ()) -> ! {
         let task = Self::from_ptr(ptr);
 
         let rs = unsafe { (*task.header).rs.clone() };
-        let Transfer { context, .. } = rs.resume(cx, ptr);
+        let Transfer { context, .. } = unsafe { rs.resume(cx, ptr) };
         unsafe {
             if task.update_state(INITIALIZED, STARTED) {
-                let Co { context, .. } = (task.func.read())(Co {
-                    context: context.unwrap(),
-                    rs,
-                });
+                let Co { context, .. } =
+                    (task.func.read())(context.map(|context| Co { context, rs }));
 
                 task.update_state(STARTED, FINISHED);
 
