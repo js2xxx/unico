@@ -15,6 +15,7 @@ cfg_if::cfg_if! {
         pub mod ucx;
     }
 }
+mod page;
 
 use core::{alloc::Layout, ptr::NonNull};
 
@@ -84,8 +85,14 @@ pub unsafe trait Context {
     }
 }
 
+fn layout_union(l1: Layout, l2: Layout) -> Layout {
+    let size = l1.size().max(l2.size());
+    let align = l1.align().max(l2.align());
+    Layout::from_size_align(size, align).unwrap()
+}
+
 unsafe fn stack_top<T>(stack: NonNull<[u8]>) -> Option<NonNull<T>> {
-    let layout = Layout::new::<T>();
+    let layout = layout_union(page::STACK_LAYOUT, Layout::new::<T>());
     let ptr = stack.as_non_null_ptr();
     let addr = ptr.addr().get();
     if stack.len() < layout.size() {
