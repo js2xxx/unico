@@ -7,14 +7,17 @@ use std::{boxed::Box, io::Error as IoError};
 
 use libc::ucontext_t;
 
-use crate::{stack_top, Context, Entry};
+use crate::{stack_top, Context, Entry, Map};
 
 type Transfer = crate::Transfer<Ucx>;
 
 std::thread_local! {
     static TRANSFER: Cell<LocalTransfer> = {
+        let root = Ucx::new_root();
         Cell::new(LocalTransfer {
-            ucx: Ucx::new_root().0,
+            from: None,
+            ucx: root.pointer,
+            on_top: root.on_top,
             data: ptr::null_mut(),
         })
     };
@@ -22,32 +25,41 @@ std::thread_local! {
 
 #[derive(Debug, Clone, Copy)]
 struct LocalTransfer {
+    from: Option<NonNull<ucontext_t>>,
     ucx: NonNull<ucontext_t>,
+    on_top: Option<Map<Ucx>>,
     data: *mut (),
 }
 
 impl From<LocalTransfer> for Transfer {
     fn from(value: LocalTransfer) -> Self {
         Self {
-            context: Ucx(value.ucx),
+            context: Ucx {
+                pointer: value.from.unwrap(),
+                on_top: value.on_top,
+            },
             data: value.data,
         }
     }
 }
 
-impl From<Transfer> for LocalTransfer {
-    fn from(value: Transfer) -> Self {
-        Self {
-            ucx: value.context.0,
-            data: value.data,
-        }
-    }
-}
+// impl From<Transfer> for LocalTransfer {
+//     fn from(value: Transfer) -> Self {
+//         Self {
+//             ucx: value.context.pointer,
+//             on_top: value.context.on_top,
+//             data: value.data,
+//         }
+//     }
+// }
 
 /// The POSIX library's [`makecontext`](https://man7.org/linux/man-pages/man3/makecontext.3.html) functions.
 #[derive(Debug)]
-#[repr(transparent)]
-pub struct Ucx(NonNull<ucontext_t>);
+#[repr(C)]
+pub struct Ucx {
+    pointer: NonNull<ucontext_t>,
+    on_top: Option<Map<Ucx>>,
+}
 
 impl Ucx {
     fn new_root() -> Self {
@@ -59,7 +71,10 @@ impl Ucx {
             "Failed to construct top level context: {:?}",
             IoError::last_os_error()
         );
-        Ucx(unsafe { NonNull::from(Box::leak(ret.assume_init())) })
+        Ucx {
+            pointer: unsafe { NonNull::from(Box::leak(ret.assume_init())) },
+            on_top: None,
+        }
     }
 
     unsafe fn new_on(stack: NonNull<[u8]>, entry: Entry<Ucx>) -> Result<Self, NewError> {
@@ -86,14 +101,23 @@ impl Ucx {
 
         libc::makecontext(ucx, mem::transmute(wrapper as extern "C" fn(_)), 1, entry);
 
-        Ok(Ucx(pointer))
+        Ok(Ucx {
+            pointer,
+            on_top: None,
+        })
     }
 
     unsafe fn resume(t: Transfer) -> Transfer {
-        let target = t.context.0;
-        let old = TRANSFER.replace(t.into());
+        let target = t.context.pointer;
+        let src = TRANSFER.get().ucx;
+        TRANSFER.set(LocalTransfer {
+            from: Some(src),
+            ucx: t.context.pointer,
+            on_top: t.context.on_top,
+            data: t.data,
+        });
 
-        let status = libc::swapcontext(old.ucx.as_ptr(), target.as_ptr());
+        let status = libc::swapcontext(src.as_ptr(), target.as_ptr());
         assert_eq!(
             status,
             0,
@@ -101,7 +125,11 @@ impl Ucx {
             IoError::last_os_error()
         );
 
-        TRANSFER.get().into()
+        let mut t: Transfer = TRANSFER.get().into();
+        match t.context.on_top.take() {
+            Some(on_top) => on_top(t),
+            None => t,
+        }
     }
 }
 
@@ -128,6 +156,15 @@ unsafe impl Context for Ucontext {
     }
 
     unsafe fn resume(&self, t: Transfer) -> Transfer {
+        Ucx::resume(t)
+    }
+
+    unsafe fn resume_with(
+        &self,
+        mut t: crate::Transfer<Ucx>,
+        map: Map<Ucx>,
+    ) -> crate::Transfer<Ucx> {
+        t.context.on_top = Some(map);
         Ucx::resume(t)
     }
 }

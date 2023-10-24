@@ -20,6 +20,7 @@ mod page;
 use core::{alloc::Layout, ptr::NonNull};
 
 /// The transfer structure between contexts.
+#[derive(Debug)]
 #[repr(C)]
 pub struct Transfer<T> {
     /// The target context to be resumed.
@@ -92,10 +93,11 @@ fn layout_union(l1: Layout, l2: Layout) -> Layout {
 }
 
 unsafe fn stack_top<T>(stack: NonNull<[u8]>) -> Option<NonNull<T>> {
-    let layout = layout_union(page::STACK_LAYOUT, Layout::new::<T>());
+    let layout = Layout::new::<T>();
+
     let ptr = stack.as_non_null_ptr();
     let addr = ptr.addr().get();
-    if stack.len() < layout.size() {
+    if stack.len() < layout_union(layout, page::STACK_LAYOUT).size() {
         return None;
     }
     let ret = (addr + stack.len() - layout.size()) & !(layout.align() - 1);
