@@ -11,11 +11,7 @@ pub struct Fcx(NonNull<c_void>);
 extern "C" {
     /// Creates a new `Context` on top of some stack.
     #[link_name = "make_fcontext"]
-    fn new_on(
-        stack_top: NonNull<()>,
-        size: usize,
-        entry: extern "C" fn(t: Transfer) -> !,
-    ) -> Fcx;
+    fn new_on(stack_top: NonNull<()>, size: usize, entry: Entry<Fcx>) -> Fcx;
 
     /// Yields the execution to another `Context`.
     #[link_name = "jump_fcontext"]
@@ -24,11 +20,7 @@ extern "C" {
     /// Yields the execution to another `Context` and executes a function on
     /// top of that stack.
     #[link_name = "ontop_fcontext"]
-    fn resume_with(
-        target: Fcx,
-        data: *mut (),
-        map: extern "C" fn(t: Transfer) -> Transfer,
-    ) -> Transfer;
+    fn resume_with(target: Fcx, data: *mut (), map: Map<Fcx>) -> Transfer;
 }
 
 pub type Transfer = crate::Transfer<Fcx>;
@@ -56,11 +48,15 @@ unsafe impl Resume for Boost {
         Ok(self::new_on(top, stack.len(), entry))
     }
 
-    unsafe fn resume(&self, t: Transfer) -> Transfer {
-        self::resume(t.context.unwrap(), t.data)
+    /// See [`Resume::resume`] for the reason why we allow this clippy lint.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    fn resume(&self, cx: Fcx, data: *mut ()) -> Transfer {
+        unsafe { self::resume(cx, data) }
     }
 
-    unsafe fn resume_with(&self, t: Transfer, map: Map<Fcx>) -> Transfer {
-        self::resume_with(t.context.unwrap(), t.data, map)
+    /// See [`Resume::resume`] for the reason why we allow this clippy lint.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    fn resume_with(&self, cx: Fcx, data: *mut (), map: Map<Fcx>) -> Transfer {
+        unsafe { self::resume_with(cx, data, map) }
     }
 }

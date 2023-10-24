@@ -31,15 +31,15 @@ struct LocalTransfer {
     data: *mut (),
 }
 
-impl From<LocalTransfer> for Transfer {
+impl From<LocalTransfer> for (Ucx, *mut ()) {
     fn from(value: LocalTransfer) -> Self {
-        Self {
-            context: Some(Ucx {
+        (
+            Ucx {
                 pointer: value.from.unwrap(),
                 on_top: value.on_top,
-            }),
-            data: value.data,
-        }
+            },
+            value.data,
+        )
     }
 }
 
@@ -69,7 +69,8 @@ impl Ucx {
     unsafe fn new_on(stack: NonNull<[u8]>, entry: Entry<Ucx>) -> Result<Self, NewError> {
         #[allow(improper_ctypes_definitions)]
         extern "C" fn wrapper(entry: Entry<Ucx>) {
-            entry(TRANSFER.get().into());
+            let (ucx, data) = TRANSFER.get().into();
+            entry(ucx, data);
         }
 
         let pointer: NonNull<ucontext_t> =
@@ -97,10 +98,7 @@ impl Ucx {
         })
     }
 
-    unsafe fn resume(t: Transfer) -> Transfer {
-        let Transfer { context, data } = t;
-        let context = context.unwrap();
-
+    fn resume(context: Ucx, data: *mut ()) -> Transfer {
         let target = context.pointer;
         let src = TRANSFER.get().ucx;
         TRANSFER.set(LocalTransfer {
@@ -110,7 +108,7 @@ impl Ucx {
             data,
         });
 
-        let status = libc::swapcontext(src.as_ptr(), target.as_ptr());
+        let status = unsafe { libc::swapcontext(src.as_ptr(), target.as_ptr()) };
         assert_eq!(
             status,
             0,
@@ -118,10 +116,13 @@ impl Ucx {
             IoError::last_os_error()
         );
 
-        let mut t: Transfer = TRANSFER.get().into();
-        match t.context.as_mut().and_then(|c| c.on_top.take()) {
-            Some(on_top) => on_top(t),
-            None => t,
+        let (mut ucx, data) = TRANSFER.get().into();
+        match ucx.on_top.take() {
+            Some(on_top) => on_top(ucx, data),
+            None => Transfer {
+                context: Some(ucx),
+                data,
+            },
         }
     }
 }
@@ -149,18 +150,17 @@ unsafe impl Resume for Ucontext {
         Ucx::new_on(stack, entry)
     }
 
-    unsafe fn resume(&self, t: Transfer) -> Transfer {
-        Ucx::resume(t)
+    fn resume(&self, cx: Ucx, data: *mut ()) -> Transfer {
+        Ucx::resume(cx, data)
     }
 
-    unsafe fn resume_with(
+    fn resume_with(
         &self,
-        mut t: crate::Transfer<Ucx>,
+        mut cx: Ucx,
+        data: *mut (),
         map: Map<Ucx>,
     ) -> crate::Transfer<Ucx> {
-        if let Some(c) = t.context.as_mut() {
-            c.on_top = Some(map);
-        }
-        Ucx::resume(t)
+        cx.on_top = Some(map);
+        Ucx::resume(cx, data)
     }
 }
