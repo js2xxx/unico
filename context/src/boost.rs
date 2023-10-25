@@ -2,7 +2,7 @@ use core::{ffi::c_void, ptr::NonNull};
 
 use crate::{stack_top, Entry, Map, Resume};
 
-/// [`Boost.Context`](https://github.com/boostorg/context/) with its `fcontext_t` functions.
+/// The `fcontext_t` wrapper type in [`Boost.Context`](https://github.com/boostorg/context/).
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct Fcx(NonNull<c_void>);
@@ -25,6 +25,7 @@ extern "C" {
 
 pub type Transfer = crate::Transfer<Fcx>;
 
+/// The [`Resume`] implementation with the [`Boost.Context`](https://github.com/boostorg/context/) functionality.
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Boost;
 

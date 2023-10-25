@@ -17,7 +17,7 @@ mod layout;
 mod raw;
 pub mod stack;
 
-use core::{alloc::Layout, ptr};
+use core::{alloc::Layout, mem::ManuallyDrop, ptr};
 
 use unico_context::{Resume, Transfer};
 
@@ -32,6 +32,10 @@ pub enum NewError<R: Resume> {
     Context(R::NewError),
 }
 
+/// A continuation of the current control flow.
+///
+/// This structure represents a continuation, a.k.a. the handle of a symmetric
+/// coroutine.
 #[derive(Debug)]
 pub struct Co<R: Resume> {
     context: R::Context,
@@ -47,6 +51,11 @@ impl<R: Resume> Co<R> {
         RawCo::new_on(stack, &rs, func).map(|context| Co { context, rs })
     }
 
+    /// Move the current control flow to this continuation.
+    ///
+    /// This method moves the current control flow to this continuation,
+    /// alongside with this object's ownership. Note that the return value may
+    /// not be the same [`Co`] as the callee because this method is symmetric.
     pub fn resume(self) -> Option<Self> {
         let Co { context, rs } = self;
         // SAFETY: `context`'s lifetime is bound to its own coroutine, and it is ALWAYS
@@ -83,6 +92,25 @@ impl<R: Resume> Co<R> {
         //    Thus, though the naming of variables will be a bit rough, the statement
         // actually proves to be true.
         let Transfer { context, .. } = unsafe { rs.resume(context, ptr::null_mut()) };
+
+        context.map(|context| Co { context, rs })
+    }
+
+    /// Similar to [`Co::resume`], but maps the source of this continuation,
+    /// a.k.a. the caller of this method, to another one if possible.
+    ///
+    /// This method resumes the continuation, and then executes `map` on the
+    /// call stack of that continuation. The only argument of `map` is the
+    /// current control flow calling this method.
+    pub fn resume_with<M: FnOnce(Self) -> Option<Self>>(self, map: M) -> Option<Self> {
+        let Co { context, rs } = self;
+
+        let mut data = ManuallyDrop::new((rs.clone(), map));
+        let ptr = (&mut data as *mut ManuallyDrop<(R, M)>).cast();
+
+        let Transfer { context, .. } =
+            unsafe { rs.resume_with(context, ptr, raw::map::<R, M>) };
+
         context.map(|context| Co { context, rs })
     }
 }
