@@ -53,6 +53,7 @@ impl<R, S, P> Builder<R, S, P> {
     /// Set the panic hook which give a continuation to pass on when the
     /// coroutine panics. Defaults to [`AbortHook`], which simply aborts the
     /// whole process.
+    #[cfg(feature = "alloc")]
     pub fn hook_panic_with<P2>(self, hook: P2) -> Builder<R, S, P2> {
         Builder {
             rs: self.rs,
