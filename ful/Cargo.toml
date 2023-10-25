@@ -8,6 +8,6 @@ alloc = ["dep:unwinding"]
 
 [dependencies]
 # Local crates
-unico-context = {path = "../context"}
+unico-context = {path = "../context", default-features = false, features = ["boost"]}
 # External crates
 unwinding = {version = "0.2", default-features = false, features = ["panic"], optional = true}

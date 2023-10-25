@@ -76,7 +76,10 @@ where
     R: Resume,
     P: PanicHook<R>,
 {
-    pub(crate) fn new_on(
+    /// # Safety
+    ///
+    /// See [`crate::Builder::spawn_unchecked`] for more information.
+    pub(crate) unsafe fn new_on(
         stack: RawStack,
         rs: &R,
         panic_hook: P,

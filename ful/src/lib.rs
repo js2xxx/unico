@@ -12,6 +12,7 @@ macro_rules! ct {
     };
 }
 
+mod builder;
 mod layout;
 mod raw;
 pub mod stack;
@@ -28,8 +29,11 @@ use core::{
 
 use unico_context::{Resume, Transfer};
 
-pub use crate::raw::{AbortHook, PanicHook};
-use crate::{raw::RawCo, stack::RawStack};
+use crate::stack::RawStack;
+pub use crate::{
+    builder::*,
+    raw::{AbortHook, PanicHook},
+};
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -58,6 +62,14 @@ pub struct Co<R: Resume> {
     rs: ManuallyDrop<R>,
 }
 
+// SAFETY: The bounds of the actual function will be checked in the builder.
+unsafe impl<R: Resume + Send + Sync> Send for Co<R> {}
+unsafe impl<R: Resume + Send + Sync> Sync for Co<R> {}
+
+// The auto derivation also requires `Resume::Context` to be `Unpin`, which is
+// unnecessary because the context is already pinned on the stack.
+impl<R: Resume + Unpin> Unpin for Co<R> {}
+
 impl<R: Resume> Co<R> {
     fn from_inner(context: R::Context, rs: R) -> Self {
         Co {
@@ -77,13 +89,9 @@ impl<R: Resume> Co<R> {
 }
 
 impl<R: Resume> Co<R> {
-    pub fn new(
-        stack: RawStack,
-        rs: R,
-        func: impl FnOnce(Option<Self>) -> Self,
-    ) -> Result<Self, NewError<R>> {
-        RawCo::new_on(stack, &rs, raw::AbortHook, func)
-            .map(|context| Co::from_inner(context, rs))
+    /// Initiate a builder for a coroutine with some defaults.
+    pub const fn builder(rs: R) -> Builder<R, (), AbortHook> {
+        Builder::with(rs)
     }
 
     /// Move the current control flow to this continuation.
@@ -179,10 +187,9 @@ impl<R: Resume> Drop for Co<R> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::String;
     use core::ptr::NonNull;
     use std::alloc::{alloc, dealloc};
-
-    use unico_context::boost::Boost;
 
     use super::*;
 
@@ -204,40 +211,36 @@ mod tests {
 
     #[test]
     fn creation() {
-        Co::new(raw_stack(), Boost, Option::unwrap).unwrap();
+        spawn(raw_stack(), Option::unwrap);
     }
 
     #[test]
     fn empty() {
-        let co = Co::new(raw_stack(), Boost, Option::unwrap).unwrap();
-        let ret = co.resume();
-        assert!(ret.is_none());
+        assert!(callcc(raw_stack(), Option::unwrap).is_none());
     }
 
     #[test]
-    fn capture() {
-        let mut a = 0;
-        let co = Co::new(raw_stack(), Boost, |co| {
-            a = 1;
+    fn capture_move() {
+        let s = String::from("hello");
+        let ret = callcc(raw_stack(), move |co| {
+            assert_eq!(s, "hello");
             co.unwrap()
-        })
-        .unwrap();
-        let ret = co.resume();
+        });
         assert!(ret.is_none());
-        assert_eq!(a, 1);
     }
 
     #[test]
-    fn asymmetric() {
+    fn capture_ref() {
         let mut counter = 0;
-        let mut co = Co::new(raw_stack(), Boost, |mut co| {
-            for _ in 0..10 {
-                counter += 1;
-                co = co.unwrap().resume();
-            }
-            co.unwrap()
-        })
-        .unwrap();
+        let mut co = unsafe {
+            spawn_unchecked(raw_stack(), |mut co| {
+                for _ in 0..10 {
+                    counter += 1;
+                    co = co.unwrap().resume();
+                }
+                co.unwrap()
+            })
+        };
         loop {
             co = match co.resume() {
                 Some(co) => co,
@@ -249,26 +252,21 @@ mod tests {
 
     #[test]
     fn symmetric() {
-        let b = Co::new(raw_stack(), Boost, |a| {
-            let c = Co::new(raw_stack(), Boost, move |b| {
+        let b = spawn(raw_stack(), |a| {
+            let c = spawn(raw_stack(), move |b| {
                 let ret = b.unwrap().resume();
                 assert!(ret.is_none());
                 a.unwrap()
-            })
-            .unwrap();
+            });
             c.resume().unwrap()
-        })
-        .unwrap();
+        });
         let ret = b.resume();
         assert!(ret.is_none());
     }
 
     #[test]
     fn symmetric_direct() {
-        let b = Co::new(raw_stack(), Boost, |a| {
-            Co::new(raw_stack(), Boost, move |_| a.unwrap()).unwrap()
-        })
-        .unwrap();
+        let b = spawn(raw_stack(), |a| spawn(raw_stack(), move |_| a.unwrap()));
         let ret = b.resume();
         assert!(ret.is_none());
     }
