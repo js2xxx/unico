@@ -1,6 +1,7 @@
 use unico_context::{boost::Boost, Resume};
+use unico_stack::{Global, Stack};
 
-use crate::{raw::RawCo, stack::RawStack, AbortHook, Co, NewError, PanicHook};
+use crate::{raw::RawCo, AbortHook, Co, NewError, PanicHook};
 
 /// The generic builder for the initialization of some coroutine.
 pub struct Builder<R, S, P> {
@@ -9,21 +10,21 @@ pub struct Builder<R, S, P> {
     panic_hook: P,
 }
 
-impl Builder<Boost, (), AbortHook> {
+impl Builder<Boost, &'static Global, AbortHook> {
     /// Initiate an empty builder for a coroutine with some defaults.
     pub const fn new() -> Self {
         Builder {
             rs: Boost,
-            stack: (),
+            stack: &Global,
             panic_hook: AbortHook,
         }
     }
 
     /// Initiate a builder for a coroutine with some defaults.
-    pub const fn with<R>(rs: R) -> Builder<R, (), AbortHook> {
+    pub const fn with<R>(rs: R) -> Builder<R, Global, AbortHook> {
         Builder {
             rs,
-            stack: (),
+            stack: Global,
             panic_hook: AbortHook,
         }
     }
@@ -40,8 +41,7 @@ impl<R, S, P> Builder<R, S, P> {
         }
     }
 
-    /// Set the stack that the coroutine will be run on. This is a compulsory
-    /// option.
+    /// Set the stack that the coroutine will be run on.
     pub fn on<S2>(self, stack: S2) -> Builder<R, S2, P> {
         Builder {
             rs: self.rs,
@@ -63,7 +63,7 @@ impl<R, S, P> Builder<R, S, P> {
     }
 }
 
-impl<R: Resume, P: PanicHook<R>> Builder<R, RawStack, P> {
+impl<R: Resume, S: Into<Stack>, P: PanicHook<R>> Builder<R, S, P> {
     /// Create a symmetric stackful coroutine.
     ///
     /// Unlike [`callcc`], the function will not be executed upon creation.
@@ -80,15 +80,15 @@ impl<R: Resume, P: PanicHook<R>> Builder<R, RawStack, P> {
     ///
     /// # Safety
     ///
-    /// - The function must be [`Send`], or the caller must not send the
+    /// - `func` must be [`Send`], or the caller must not send the
     ///   coroutine to another thread.
-    /// - The function must be `'static`, or it must outlive the returned
+    /// - `func` must be `'static`, or it must outlive the returned
     ///   [`Co`].
     pub unsafe fn spawn_unchecked(
         self,
         func: impl FnOnce(Option<Co<R>>) -> Co<R>,
     ) -> Result<Co<R>, NewError<R>> {
-        RawCo::new_on(self.stack, &self.rs, self.panic_hook, func)
+        RawCo::new_on(self.stack.into(), &self.rs, self.panic_hook, func)
             .map(|context| Co::from_inner(context, self.rs))
     }
 }
@@ -96,8 +96,35 @@ impl<R: Resume, P: PanicHook<R>> Builder<R, RawStack, P> {
 /// Create a symmetric stackful coroutine.
 ///
 /// Unlike [`callcc`], the function will not be executed upon creation.
-pub fn spawn<F>(stack: RawStack, func: F) -> Co<Boost>
+#[cfg(feature = "global-stack-allocator")]
+pub fn spawn<F>(func: F) -> Co<Boost>
 where
+    F: FnOnce(Option<Co<Boost>>) -> Co<Boost> + Send + 'static,
+{
+    spawn_on(&Global, func)
+}
+
+/// Like [`spawn`], but leave some checks on the function to the caller.
+///
+/// # Safety
+///
+/// - `func` must be [`Send`], or the caller must not send the coroutine
+///   to another thread.
+/// - `func` must be `'static`, or it must outlive the returned [`Co`].
+#[cfg(feature = "global-stack-allocator")]
+pub unsafe fn spawn_unchecked<F>(func: F) -> Co<Boost>
+where
+    F: FnOnce(Option<Co<Boost>>) -> Co<Boost>,
+{
+    spawn_unchecked_on(&Global, func)
+}
+
+/// Create a symmetric stackful coroutine on a specific stack.
+///
+/// Unlike [`callcc`], the function will not be executed upon creation.
+pub fn spawn_on<S, F>(stack: S, func: F) -> Co<Boost>
+where
+    S: Into<Stack>,
     F: FnOnce(Option<Co<Boost>>) -> Co<Boost> + Send + 'static,
 {
     Builder::new()
@@ -106,15 +133,16 @@ where
         .expect("failed to create a symmetric coroutine")
 }
 
-/// Like [`spawn`], but leave some checks on the function to the caller.
+/// Like [`spawn_on`], but leave some checks on the function to the caller.
 ///
 /// # Safety
 ///
-/// - The function must be [`Send`], or the caller must not send the coroutine
+/// - `func` must be [`Send`], or the caller must not send the coroutine
 ///   to another thread.
-/// - The function must be `'static`, or it must outlive the returned [`Co`].
-pub unsafe fn spawn_unchecked<F>(stack: RawStack, func: F) -> Co<Boost>
+/// - `func` must be `'static`, or it must outlive the returned [`Co`].
+pub unsafe fn spawn_unchecked_on<S, F>(stack: S, func: F) -> Co<Boost>
 where
+    S: Into<Stack>,
     F: FnOnce(Option<Co<Boost>>) -> Co<Boost>,
 {
     Builder::new()
@@ -127,9 +155,10 @@ where
 ///
 /// This function creates a symmetric stackful coroutine and immediately resume
 /// it once.
-pub fn callcc<F>(stack: RawStack, func: F) -> Option<Co<Boost>>
+#[cfg(feature = "global-stack-allocator")]
+pub fn callcc<F>(func: F) -> Option<Co<Boost>>
 where
     F: FnOnce(Option<Co<Boost>>) -> Co<Boost> + Send + 'static,
 {
-    spawn(stack, func).resume()
+    spawn(func).resume()
 }

@@ -1,5 +1,6 @@
 #![no_std]
 #![feature(alloc_layout_extra)]
+#![feature(allocator_api)]
 #![feature(const_alloc_layout)]
 #![feature(strict_provenance)]
 
@@ -15,7 +16,6 @@ macro_rules! ct {
 mod builder;
 mod layout;
 mod raw;
-pub mod stack;
 
 #[cfg(feature = "alloc")]
 use alloc::boxed::Box;
@@ -28,8 +28,8 @@ use core::{
 };
 
 use unico_context::{Resume, Transfer};
+use unico_stack::Stack;
 
-use crate::stack::RawStack;
 pub use crate::{
     builder::*,
     raw::{AbortHook, PanicHook},
@@ -53,9 +53,9 @@ pub enum NewError<R: Resume> {
 /// coroutine.
 ///
 /// Note that if `alloc` feature is not enabled and the coroutine is dropped
-/// while not resumed to end, the stack allocation and context resumer will be
-/// ***LEAKED***. It's because the dropping process requires unwinding, and thus
-/// a `Box<dyn Any + Send>`.
+/// while not resumed to end, all the data on the call stack alongside with the
+/// whole stack allocation will be ***LEAKED***. It's because the dropping
+/// process requires unwinding, and thus a `Box<dyn Any + Send>`.
 #[derive(Debug)]
 pub struct Co<R: Resume> {
     context: ManuallyDrop<R::Context>,
@@ -90,7 +90,7 @@ impl<R: Resume> Co<R> {
 
 impl<R: Resume> Co<R> {
     /// Initiate a builder for a coroutine with some defaults.
-    pub const fn builder(rs: R) -> Builder<R, (), AbortHook> {
+    pub const fn builder(rs: R) -> Builder<R, unico_stack::Global, AbortHook> {
         Builder::with(rs)
     }
 
@@ -187,42 +187,28 @@ impl<R: Resume> Drop for Co<R> {
 
 #[cfg(test)]
 mod tests {
-    use alloc::string::String;
-    use core::ptr::NonNull;
-    use std::alloc::{alloc, dealloc};
+    use alloc::{alloc::Global, string::String};
+
+    use unico_stack::global_stack_allocator;
 
     use super::*;
 
-    fn raw_stack() -> RawStack {
-        #[repr(align(4096))]
-        struct Stack([u8; 6144]);
-
-        // UNSAFE: `memory` and `drop` are valid.
-        unsafe {
-            let layout = Layout::new::<Stack>();
-            let memory = alloc(layout);
-            std::println!("alloc {memory:p}");
-            RawStack::new(NonNull::new_unchecked(memory), layout, |ptr, layout| {
-                std::println!("dealloc {ptr:p}");
-                dealloc(ptr.as_ptr(), layout)
-            })
-        }
-    }
+    global_stack_allocator!(Global);
 
     #[test]
     fn creation() {
-        spawn(raw_stack(), Option::unwrap);
+        spawn(Option::unwrap);
     }
 
     #[test]
     fn empty() {
-        assert!(callcc(raw_stack(), Option::unwrap).is_none());
+        assert!(callcc(Option::unwrap).is_none());
     }
 
     #[test]
     fn capture_move() {
         let s = String::from("hello");
-        let ret = callcc(raw_stack(), move |co| {
+        let ret = callcc(move |co| {
             assert_eq!(s, "hello");
             co.unwrap()
         });
@@ -233,7 +219,7 @@ mod tests {
     fn capture_ref() {
         let mut counter = 0;
         let mut co = unsafe {
-            spawn_unchecked(raw_stack(), |mut co| {
+            spawn_unchecked(|mut co| {
                 for _ in 0..10 {
                     counter += 1;
                     co = co.unwrap().resume();
@@ -252,8 +238,8 @@ mod tests {
 
     #[test]
     fn symmetric() {
-        let b = spawn(raw_stack(), |a| {
-            let c = spawn(raw_stack(), move |b| {
+        let b = spawn(|a| {
+            let c = spawn(move |b| {
                 let ret = b.unwrap().resume();
                 assert!(ret.is_none());
                 a.unwrap()
@@ -266,8 +252,6 @@ mod tests {
 
     #[test]
     fn symmetric_direct() {
-        let b = spawn(raw_stack(), |a| spawn(raw_stack(), move |_| a.unwrap()));
-        let ret = b.resume();
-        assert!(ret.is_none());
+        assert!(callcc(|a| spawn(move |_| a.unwrap())).is_none());
     }
 }

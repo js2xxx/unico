@@ -2,5 +2,6 @@
 members = [
   "context",
   "ful",
+  "stack",
 ]
 resolver = "2"
