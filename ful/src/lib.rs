@@ -141,14 +141,15 @@ impl<R: Resume> Co<R> {
         let mut data = ManuallyDrop::new((rs.clone(), map));
         let ptr = (&mut data as *mut ManuallyDrop<(R, M)>).cast();
 
+        // SAFETY: The proof is the same as the one in `Co::resume`.
         let Transfer { context, .. } =
             unsafe { rs.resume_with(context, ptr, raw::map::<R, M>) };
 
         context.map(|context| Co::from_inner(context, rs))
     }
 
-    /// Resume the unwinding for this coroutine's partial destruction. Use it in
-    /// the process of error handling for some `catch_unwind`.
+    /// Resume the unwinding for this coroutine's partial destruction process.
+    /// Use it in the process of error handling for some `catch_unwind`.
     ///
     /// Note that if you don't use it according to the text above, then the
     /// destruction process will be aborted and the caller of that process
@@ -162,6 +163,9 @@ impl<R: Resume> Co<R> {
 impl<R: Resume> Drop for Co<R> {
     fn drop(&mut self) {
         #[allow(unused_variables)]
+        // SAFETY： We don't use `self.context` and `self.rs` any longer after taking out
+        // data from these fields. The safety proof of `rx.resume_with` is the same as the
+        // one in `Co::resume`.
         unsafe {
             let cx = ManuallyDrop::take(&mut self.context);
             let rs = ManuallyDrop::take(&mut self.rs);
