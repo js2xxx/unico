@@ -47,7 +47,7 @@ pub type Map<C> = unsafe extern "C" fn(cx: C, data: *mut ()) -> Transfer<C>;
 /// [`Resume::new_on`].
 pub unsafe trait Resume: Clone {
     /// The context reference bound to a specfic stack.
-    type Context;
+    type Context: 'static;
 
     /// The error type returned during creation of some context.
     type NewError;

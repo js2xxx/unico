@@ -4,6 +4,10 @@ name = "unico-ful"
 version = "0.1.0"
 
 [features]
+alloc = ["dep:unwinding"]
 
 [dependencies]
+# Local crates
 unico-context = {path = "../context"}
+# External crates
+unwinding = {version = "0.2", default-features = false, features = ["panic"], optional = true}
