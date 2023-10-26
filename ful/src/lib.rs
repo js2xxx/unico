@@ -17,9 +17,9 @@ mod builder;
 mod layout;
 mod raw;
 
-#[cfg(feature = "alloc")]
+#[cfg(feature = "unwind")]
 use alloc::boxed::Box;
-#[cfg(feature = "alloc")]
+#[cfg(feature = "unwind")]
 use core::any::Any;
 use core::{
     alloc::Layout,
@@ -27,7 +27,7 @@ use core::{
     ptr,
 };
 
-use unico_context::{Resume, Transfer};
+use unico_context::{boost::Boost, Resume, Transfer};
 use unico_stack::Stack;
 
 pub use crate::{
@@ -35,7 +35,7 @@ pub use crate::{
     raw::{AbortHook, PanicHook},
 };
 
-#[cfg(feature = "alloc")]
+#[cfg(feature = "unwind")]
 extern crate alloc;
 
 #[cfg(test)]
@@ -57,7 +57,7 @@ pub enum NewError<R: Resume> {
 /// whole stack allocation will be ***LEAKED***. It's because the dropping
 /// process requires unwinding, and thus a `Box<dyn Any + Send>`.
 #[derive(Debug)]
-pub struct Co<R: Resume> {
+pub struct Co<R: Resume = Boost> {
     context: ManuallyDrop<R::Context>,
     rs: ManuallyDrop<R>,
 }
@@ -145,6 +145,19 @@ impl<R: Resume> Co<R> {
     /// This method resumes the continuation, and then executes `map` on the
     /// call stack of that continuation. The only argument of `map` is the
     /// current control flow calling this method.
+    ///
+    /// Note that `M` doesn't requires the trait and lifetime bounds that are
+    /// required by the main function:
+    ///
+    /// - `M` need not to be [`Send`] because the function will be executed on
+    ///   the same execution unit (such as the same thread in user space or the
+    ///   same CPU core in kernel) right after the stack switch.
+    /// - `M` need not to be `'static` because all the instances of [`Co`] are
+    ///   `'static` by default or its lifetime should be managed by the caller;
+    ///   since both the source (the current call stack) and the destination
+    ///   (`self`) of the current control flow transfer are valid at the time,
+    ///   the function will be called (consumed) before the transfer completes,
+    ///   and thus unable to escape its own lifetime.
     pub fn resume_with<M: FnOnce(Self) -> Option<Self>>(self, map: M) -> Option<Self> {
         let (context, rs) = Co::into_inner(self);
 
@@ -164,7 +177,7 @@ impl<R: Resume> Co<R> {
     /// Note that if you don't use it according to the text above, then the
     /// destruction process will be aborted and the caller of that process
     /// will not be returned and thus unreachable forever!
-    #[cfg(feature = "alloc")]
+    #[cfg(feature = "unwind")]
     pub fn resume_unwind(&self, payload: Box<dyn Any + Send>) -> Box<dyn Any + Send> {
         raw::resume_unwind(self, payload)
     }
@@ -179,15 +192,16 @@ impl<R: Resume> Drop for Co<R> {
         unsafe {
             let cx = ManuallyDrop::take(&mut self.context);
             let rs = ManuallyDrop::take(&mut self.rs);
-            #[cfg(feature = "alloc")]
+            #[cfg(feature = "unwind")]
             rs.resume_with(cx, ptr::null_mut(), raw::unwind::<R>);
         }
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-stack-allocator"))]
 mod tests {
-    use alloc::{alloc::Global, string::String};
+    use core::convert::identity;
+    use std::{alloc::Global, string::String};
 
     use unico_stack::global_stack_allocator;
 
@@ -202,7 +216,7 @@ mod tests {
 
     #[test]
     fn empty() {
-        assert!(callcc(Option::unwrap).is_none());
+        assert!(callcc(identity).is_none());
     }
 
     #[test]
@@ -210,7 +224,7 @@ mod tests {
         let s = String::from("hello");
         let ret = callcc(move |co| {
             assert_eq!(s, "hello");
-            co.unwrap()
+            co
         });
         assert!(ret.is_none());
     }
@@ -252,6 +266,6 @@ mod tests {
 
     #[test]
     fn symmetric_direct() {
-        assert!(callcc(|a| spawn(move |_| a.unwrap())).is_none());
+        assert!(callcc(|a| spawn(move |_| a)).is_none());
     }
 }
