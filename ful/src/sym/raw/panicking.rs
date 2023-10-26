@@ -10,11 +10,11 @@ use unico_context::Transfer;
 use unwinding::panic;
 
 #[cfg(feature = "unwind")]
-use crate::Co;
+use crate::sym::Co;
 
 #[cfg(feature = "unwind")]
 #[repr(transparent)]
-pub(crate) struct HandleDrop<C>(pub C);
+pub(in crate::sym) struct HandleDrop<C>(pub C);
 
 // SAFETY: If the actual context is not `Send`, then the coroutine will also not
 // be `Send`, thus, preventing sending the context to another thread and unwinds
@@ -24,7 +24,7 @@ unsafe impl<C> Send for HandleDrop<C> {}
 
 #[cfg(feature = "unwind")]
 #[allow(improper_ctypes_definitions)]
-pub(crate) extern "C" fn unwind<R: Resume>(
+pub(in crate::sym) extern "C" fn unwind<R: Resume>(
     cx: R::Context,
     _: *mut (),
 ) -> Transfer<R::Context> {
@@ -33,7 +33,7 @@ pub(crate) extern "C" fn unwind<R: Resume>(
 }
 
 #[cfg(feature = "unwind")]
-pub(crate) fn resume_unwind<R: Resume>(
+pub(in crate::sym) fn resume_unwind<R: Resume>(
     _: &Co<R>,
     payload: Box<dyn Any + Send>,
 ) -> Box<dyn Any + Send> {
@@ -76,12 +76,12 @@ impl<R: Resume> PanicHook<R> for AbortHook {
     }
 }
 
-#[cfg(feature = "unwind")]
 impl<T, R> PanicHook<R> for T
 where
     T: FnOnce(Box<dyn Any + Send>) -> Co<R>,
     R: Resume,
 {
+    #[cfg(feature = "unwind")]
     fn rewind(self, payload: Box<dyn Any + Send>) -> Co<R> {
         self(payload)
     }

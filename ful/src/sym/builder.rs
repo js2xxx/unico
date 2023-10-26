@@ -1,7 +1,7 @@
 use unico_context::{boost::Boost, Resume};
 use unico_stack::{Global, Stack};
 
-use crate::{raw::RawCo, AbortHook, Co, NewError, PanicHook};
+use super::{raw::RawCo, AbortHook, Co, NewError, PanicHook};
 
 /// The generic builder for the initialization of some coroutine.
 pub struct Builder<R, S, P> {
