@@ -164,3 +164,18 @@ where
 {
     spawn(|co| func(co.unwrap())).resume()
 }
+
+/// Like [`callcc`], but leave some checks on the function to the caller.
+///
+/// # Safety
+///
+/// - `func` must be [`Send`], or the caller must not send the coroutine to
+///   another thread.
+/// - `func` must be `'static`, or the caller must ensure that the returned
+///   [`Co`] not escape the lifetime of the function.
+pub unsafe fn callcc_unchecked<F>(func: F) -> Option<Co>
+where
+    F: FnOnce(Co) -> Co,
+{
+    spawn_unchecked(|co| func(co.unwrap())).resume()
+}

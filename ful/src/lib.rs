@@ -2,6 +2,8 @@
 #![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
 #![feature(const_alloc_layout)]
+#![feature(coroutine_trait)]
+#![feature(coroutines)]
 #![feature(strict_provenance)]
 
 macro_rules! ct {
@@ -15,8 +17,6 @@ macro_rules! ct {
 
 pub mod asym;
 pub mod sym;
-
-pub use self::sym::Co;
 
 #[cfg(feature = "unwind")]
 extern crate alloc;
