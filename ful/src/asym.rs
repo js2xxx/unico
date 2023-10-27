@@ -21,13 +21,16 @@ use crate::{
     Build, BuildUnchecked, Builder, NewError, Sealed,
 };
 
-enum Yield<Y, C> {
+enum Payload<Y> {
     Yielded(Y),
-    Complete(C),
+    // We must eliminate `C`'s type signature so as to allow pointers or references of
+    // `YieldHandle` to be stored in thread locals.
+    Complete(*const ()),
     #[cfg(any(feature = "unwind", feature = "std"))]
     Panicked(Box<dyn Any + Send>),
 }
 
+/// A generator, a.k.a. an symmetric coroutine.
 // Safety notice for the internal resuming order (N for `ptr::null_mut`):
 //
 //          caller                    generator
@@ -58,21 +61,30 @@ enum Yield<Y, C> {
 //            * ````````````````````````` |
 //            * ````````````````````````` |
 //     C <- resume <--------------- end execution
-pub struct Gn<'a, C, Y, R = (), Z: Resume = Boost> {
+pub struct Gn<'a, C, Y = (), R = (), Z: Resume = Boost> {
     inner: Option<Co<Z>>,
     marker: PhantomGn<'a, C, Y, R>,
 }
 type PhantomGn<'a, C, Y, R> =
-    PhantomData<dyn FnOnce(R) -> Yield<Y, C> + Unpin + Send + UnwindSafe + 'a>;
+    PhantomData<dyn FnOnce(R) -> (Y, C) + Unpin + Send + UnwindSafe + 'a>;
 
-pub struct YieldHandle<'a, C, Y, R = (), Z: Resume = Boost> {
+/// The yield handle that the [coroutine](Gn) holds, used for yielding back to
+/// its parent call stack.
+///
+/// This type does not require all the generics that `Gn` requires.
+///
+/// 1. `'a` is not required because the coroutine can only obtain it's local
+///    reference in the main procedure, thus prevents it from escaping from it.
+/// 2. `C` is not required because the main procedure returns a value of that
+///    type, which has nothing to do with its yield handle.
+pub struct YieldHandle<Y = (), R = (), Z: Resume = Boost> {
     inner: Option<Co<Z>>,
-    marker: PhantomYieldHandle<'a, C, Y, R>,
+    marker: PhantomYieldHandle<Y, R>,
 }
-type PhantomYieldHandle<'a, C, Y, R> =
-    PhantomData<dyn FnOnce(Yield<Y, C>) -> R + Unpin + Send + UnwindSafe + 'a>;
+type PhantomYieldHandle<Y, R> =
+    PhantomData<dyn FnOnce(Y) -> R + Unpin + Send + UnwindSafe>;
 
-impl Gn<'static, (), (), (), Boost> {
+impl Gn<'static, ()> {
     pub fn builder() -> Builder<Boost, &'static Global, AbortHook> {
         Builder::new()
     }
@@ -82,7 +94,7 @@ impl<'a, C, Y, R, Z: Resume> Sealed for Gn<'a, C, Y, R, Z> {}
 
 impl<'a, F, C, Y, R, Z, S, P> Build<F, Z, S, P> for Gn<'a, C, Y, R, Z>
 where
-    F: FnOnce(&mut YieldHandle<'a, C, Y, R, Z>, R) -> C + Send + 'a,
+    F: FnOnce(&mut YieldHandle<Y, R, Z>, R) -> C + Send + 'a,
     Z: Resume,
     S: Into<Stack>,
     P: PanicHook<Z>,
@@ -95,7 +107,7 @@ where
 
 impl<'a, F, C, Y, R, Z, S, P> BuildUnchecked<F, Z, S, P> for Gn<'a, C, Y, R, Z>
 where
-    F: FnOnce(&mut YieldHandle<'a, C, Y, R, Z>, R) -> C,
+    F: FnOnce(&mut YieldHandle<Y, R, Z>, R) -> C,
     Z: Resume,
     S: Into<Stack>,
     P: PanicHook<Z>,
@@ -123,17 +135,23 @@ where
                 inner: Some(co),
                 marker: PhantomData,
             };
-
+            let c;
             #[cfg(any(feature = "unwind", feature = "std"))]
             let y = match catch_unwind(AssertUnwindSafe(|| func(&mut handle, initial))) {
-                Ok(complete) => Yield::<Y, C>::Complete(complete),
+                Ok(complete) => {
+                    c = complete;
+                    Payload::<Y>::Complete((&c as *const C).cast())
+                }
                 Err(payload) => {
                     let payload = handle.inner.as_ref().unwrap().resume_unwind(payload);
-                    Yield::<Y, C>::Panicked(payload)
+                    Payload::Panicked(payload)
                 }
             };
             #[cfg(not(any(feature = "unwind", feature = "std")))]
-            let y = Yield::<Y, C>::Complete(func(&mut handle, initial));
+            let y = {
+                c = func(&mut handle, initial);
+                Payload::<Y>::Complete((&c as *const C).cast())
+            };
 
             let mut y = MaybeUninit::new(y);
             let co = handle.inner.take().unwrap();
@@ -166,18 +184,18 @@ impl<'a, C, Y, R, Z: Resume> Gn<'a, C, Y, R, Z> {
         let (co, payload) = res.unwrap();
 
         // SAFETY: See step 3 of the type's safety notice.
-        match unsafe { payload.cast::<Yield<Y, C>>().read() } {
-            Yield::Yielded(yielded) => {
+        match unsafe { payload.cast::<Payload<Y>>().read() } {
+            Payload::Yielded(yielded) => {
                 self.inner = Some(co);
                 CoroutineState::Yielded(yielded)
             }
-            Yield::Complete(complete) => {
+            Payload::Complete(complete) => {
                 let res = co.resume();
                 debug_assert!(res.is_none());
-                CoroutineState::Complete(complete)
+                CoroutineState::Complete(unsafe { complete.cast::<C>().read() })
             }
             #[cfg(any(feature = "unwind", feature = "std"))]
-            Yield::Panicked(payload) => resume_unwind(payload),
+            Payload::Panicked(payload) => resume_unwind(payload),
         }
     }
 }
@@ -191,9 +209,9 @@ impl<C, Y, R, Z: Resume + Unpin> Coroutine<R> for Gn<'_, C, Y, R, Z> {
     }
 }
 
-impl<'a, C, Y, R, Z: Resume> YieldHandle<'a, C, Y, R, Z> {
+impl<Y, R, Z: Resume> YieldHandle<Y, R, Z> {
     pub fn yield_(&mut self, yielded: Y) -> R {
-        let mut y = MaybeUninit::new(Yield::<Y, C>::Yielded(yielded));
+        let mut y = MaybeUninit::new(Payload::Yielded(yielded));
 
         let co = self.inner.take().unwrap();
         // SAFETY: See step 3 of the type's safety notice.
