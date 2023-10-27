@@ -16,7 +16,10 @@ macro_rules! ct {
 }
 
 pub mod asym;
+mod builder;
 pub mod sym;
+
+pub use crate::builder::*;
 
 #[cfg(feature = "unwind")]
 extern crate alloc;

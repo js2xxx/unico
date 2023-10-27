@@ -6,9 +6,13 @@ use core::{
     ptr,
 };
 
-use unico_context::Resume;
+use unico_context::{boost::Boost, Resume};
+use unico_stack::Global;
 
-use crate::sym::{Co, NewError};
+use crate::{
+    sym::{AbortHook, Co, NewError},
+    Builder,
+};
 
 enum Yield<Y, C> {
     Yielded(Y),
@@ -19,10 +23,10 @@ enum Yield<Y, C> {
 //
 //          caller                    generator
 // -----------------------------------------------------------
-//          resume ----------------> start execution
+//       0. callcc ----------------> start execution
 //            * ````````````````````````` |
 //            * ````````````````````````` |
-//     N <- resume <----------- 1. resume_with_payload(N)
+//     N <- callcc <----------- 1. resume_with_payload(N)
 //            | ````````````````````````` *
 //            | ````````````````````````` *
 //       2. resume(R) -----------> resume_with_payload() -> R
@@ -45,24 +49,71 @@ enum Yield<Y, C> {
 //            * ````````````````````````` |
 //            * ````````````````````````` |
 //     C <- resume <--------------- end execution
-pub struct Gn<'a, R, Y, C, Z: Resume> {
+pub struct Gn<'a, Y, C, R = (), Z: Resume = Boost> {
     inner: Option<Co<Z>>,
-    marker: PhantomGn<'a, R, Y, C>,
+    marker: PhantomGn<'a, Y, C, R>,
 }
-type PhantomGn<'a, R, Y, C> =
+type PhantomGn<'a, Y, C, R> =
     PhantomData<dyn FnOnce(R) -> Yield<Y, C> + Unpin + Send + 'a>;
 
-pub struct YieldHandle<'a, R, Y, C, Z: Resume> {
+pub struct YieldHandle<'a, Y, C, R = (), Z: Resume = Boost> {
     inner: Option<Co<Z>>,
     marker: PhantomYieldHandle<'a, Y, C, R>,
 }
 type PhantomYieldHandle<'a, Y, C, R> =
     PhantomData<dyn FnOnce(Yield<Y, C>) -> R + Unpin + Send + 'a>;
 
-impl<'a, R, Y, C, Z: Resume> Gn<'a, R, Y, C, Z> {
+impl<'a, Y, C, R, Z: Resume> Gn<'a, Y, C, R, Z> {
+    /// # Safety
+    ///
+    /// The caller must observe the type's safety notice.
+    pub(crate) unsafe fn wrapper(
+        func: impl FnOnce(&mut YieldHandle<'a, Y, C, R, Z>, R) -> C + Send + 'a,
+    ) -> impl FnOnce(Co<Z>) -> Co<Z> + 'a {
+        move |co: Co<Z>| {
+            // SAFETY: See step 1 of the type's safety notice.
+            let res = unsafe { co.resume_with_payload(ptr::null_mut()) };
+            let (co, payload) = res.unwrap();
+
+            // SAFETY: See step 2 of the type's safety notice.
+            let initial = unsafe { payload.cast::<R>().read() };
+            let mut handle = YieldHandle {
+                inner: Some(co),
+                marker: PhantomData,
+            };
+
+            let complete = func(&mut handle, initial);
+
+            let mut c = MaybeUninit::new(Yield::<Y, C>::Complete(complete));
+            let co = handle.inner.take().unwrap();
+
+            // SAFETY: See step 4 of the type's safety notice.
+            let res = unsafe { co.resume_with_payload(c.as_mut_ptr().cast()) };
+            res.unwrap().0
+        }
+    }
+
+    /// # Safety
+    ///
+    /// The caller must observe the type's safety notice.
+    pub(crate) unsafe fn from_inner(co: Option<Co<Z>>) -> Self {
+        Gn {
+            inner: co,
+            marker: PhantomData,
+        }
+    }
+}
+
+impl Gn<'static, (), (), (), Boost> {
+    pub fn builder() -> Builder<Boost, &'static Global, AbortHook> {
+        Builder::new()
+    }
+}
+
+impl<'a, Y, C, R, Z: Resume> Gn<'a, Y, C, R, Z> {
     pub fn new(
         rs: Z,
-        func: impl FnOnce(&mut YieldHandle<'a, R, Y, C, Z>, R) -> C + Send + 'a,
+        func: impl FnOnce(&mut YieldHandle<'a, Y, C, R, Z>, R) -> C + Send + 'a,
     ) -> Result<Self, NewError<Z>> {
         let wrapper = move |co: Option<Co<Z>>| {
             let co = co.unwrap();
@@ -124,7 +175,7 @@ impl<'a, R, Y, C, Z: Resume> Gn<'a, R, Y, C, Z> {
     }
 }
 
-impl<R, Y, C, Z: Resume + Unpin> Coroutine<R> for Gn<'_, R, Y, C, Z> {
+impl<Y, C, R, Z: Resume + Unpin> Coroutine<R> for Gn<'_, Y, C, R, Z> {
     type Yield = Y;
     type Return = C;
 
@@ -133,7 +184,7 @@ impl<R, Y, C, Z: Resume + Unpin> Coroutine<R> for Gn<'_, R, Y, C, Z> {
     }
 }
 
-impl<'a, R, Y, C, Z: Resume> YieldHandle<'a, R, Y, C, Z> {
+impl<'a, Y, C, R, Z: Resume> YieldHandle<'a, Y, C, R, Z> {
     pub fn yield_(&mut self, yielded: Y) -> R {
         let mut y = MaybeUninit::new(Yield::<Y, C>::Yielded(yielded));
 
@@ -148,25 +199,22 @@ impl<'a, R, Y, C, Z: Resume> YieldHandle<'a, R, Y, C, Z> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-stack-allocator"))]
 mod tests {
     use core::ops::CoroutineState;
 
-    use unico_context::boost::Boost;
-
-    use super::Gn;
+    use crate::gen;
 
     #[test]
     fn basic() {
-        let mut gn = Gn::new(Boost, |y, mut r| {
+        let mut gn = gen(|y, mut r| {
             for i in 0..100 {
                 assert_eq!(r, i);
                 r = y.yield_(i);
             }
             assert_eq!(r, 1024);
             1024
-        })
-        .unwrap();
+        });
         for i in 0..100 {
             assert!(matches!(gn.resume(i), CoroutineState::Yielded(x) if x == i));
         }

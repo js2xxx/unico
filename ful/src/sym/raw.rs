@@ -20,7 +20,7 @@ struct Layouts {
     offset_hook: usize,
 }
 
-pub(super) struct RawCo<F, R: Resume, P: PanicHook<R>> {
+pub(crate) struct RawCo<F, R: Resume, P: PanicHook<R>> {
     rs: *mut R,
     func: *mut F,
     stack: *mut Stack,
@@ -79,7 +79,7 @@ where
     /// # Safety
     ///
     /// See `super::Builder::spawn_unchecked` for more information.
-    pub(super) unsafe fn new_on(
+    pub(crate) unsafe fn new_on(
         stack: Stack,
         rs: &R,
         panic_hook: P,
