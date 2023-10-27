@@ -19,6 +19,10 @@ pub mod asym;
 mod builder;
 pub mod sym;
 
+use core::alloc::Layout;
+
+use unico_context::Resume;
+
 pub use crate::builder::*;
 
 #[cfg(any(feature = "unwind", feature = "std"))]
@@ -26,6 +30,12 @@ extern crate alloc;
 
 #[cfg(any(test, feature = "std"))]
 extern crate std;
+
+#[derive(Debug)]
+pub enum NewError<R: Resume> {
+    StackTooSmall { expected: Layout, actual: Layout },
+    Context(R::NewError),
+}
 
 #[cfg(all(not(feature = "std"), feature = "unwind"))]
 mod unwind {
