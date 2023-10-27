@@ -21,8 +21,29 @@ pub mod sym;
 
 pub use crate::builder::*;
 
-#[cfg(feature = "unwind")]
+#[cfg(any(feature = "unwind", feature = "std"))]
 extern crate alloc;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "std"))]
 extern crate std;
+
+#[cfg(all(not(feature = "std"), feature = "unwind"))]
+mod unwind {
+    use alloc::boxed::Box;
+    use core::any::Any;
+
+    pub use unwinding::panic::catch_unwind;
+
+    pub fn resume_unwind(payload: Box<dyn Any + Send>) -> ! {
+        unwinding::panic::begin_panic(payload);
+        unreachable!("Unwind erroneously returned.")
+    }
+
+    pub fn panic_any<M: Any + Send>(msg: M) -> ! {
+        resume_unwind(Box::new(msg))
+    }
+}
+#[cfg(feature = "std")]
+mod unwind {
+    pub use std::panic::{catch_unwind, panic_any, resume_unwind};
+}

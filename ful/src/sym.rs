@@ -1,9 +1,9 @@
 mod layout;
 pub(crate) mod raw;
 
-#[cfg(feature = "unwind")]
+#[cfg(any(feature = "unwind", feature = "std"))]
 use alloc::boxed::Box;
-#[cfg(feature = "unwind")]
+#[cfg(any(feature = "unwind", feature = "std"))]
 use core::any::Any;
 use core::{
     alloc::Layout,
@@ -172,9 +172,8 @@ impl<R: Resume> Co<R> {
     /// This function is required due to the flaw in the unwinding
     /// implementation of Rust standard library which immediately aborts
     /// when encountering a foreign exception class code instead of
-    /// continuing the process. Otherwise, we could define our own exception
-    /// class using [`unwinding::panicking::Exception`].
-    #[cfg(feature = "unwind")]
+    /// continuing the process.
+    #[cfg(any(feature = "unwind", feature = "std"))]
     pub fn resume_unwind(&self, payload: Box<dyn Any + Send>) -> Box<dyn Any + Send> {
         raw::resume_unwind(self, payload)
     }
@@ -189,7 +188,7 @@ impl<R: Resume> Drop for Co<R> {
         unsafe {
             let cx = ManuallyDrop::take(&mut self.context);
             let rs = ManuallyDrop::take(&mut self.rs);
-            #[cfg(feature = "unwind")]
+            #[cfg(any(feature = "unwind", feature = "std"))]
             rs.resume_with(cx, ptr::null_mut(), raw::unwind::<R>);
         }
     }
