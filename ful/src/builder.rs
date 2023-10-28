@@ -14,8 +14,6 @@ pub struct Builder<R, S, P> {
     pub panic_hook: P,
 }
 
-pub(crate) trait Sealed: Sized {}
-
 /// Build a stackful-coroutine-type object from the builder.
 pub trait Build<F, R, S, P>: BuildUnchecked<F, R, S, P> {
     /// Build a stackful-coroutine-type object from the builder.
@@ -24,7 +22,7 @@ pub trait Build<F, R, S, P>: BuildUnchecked<F, R, S, P> {
 
 /// Similar to [`Build`], but leave some check of the arguments to the caller.
 #[allow(private_bounds)]
-pub trait BuildUnchecked<F, R, S, P>: Sealed {
+pub trait BuildUnchecked<F, R, S, P>: Sized {
     type Error;
 
     /// # Safety
@@ -88,13 +86,11 @@ impl<R, S, P> Builder<R, S, P> {
             panic_hook: hook,
         }
     }
-}
 
-impl<Z: Resume, S: Into<Stack>, P: PanicHook<Z>> Builder<Z, S, P> {
     /// Build a stackful-coroutine-type object from the builder.
     pub fn build<T, F>(self, arg: F) -> Result<T, T::Error>
     where
-        T: Build<F, Z, S, P>,
+        T: Build<F, R, S, P>,
     {
         T::build(self, arg)
     }
@@ -108,11 +104,13 @@ impl<Z: Resume, S: Into<Stack>, P: PanicHook<Z>> Builder<Z, S, P> {
     /// Please see the safety requirements at implementation.
     pub unsafe fn build_unchecked<T, F>(self, arg: F) -> Result<T, T::Error>
     where
-        T: BuildUnchecked<F, Z, S, P>,
+        T: BuildUnchecked<F, R, S, P>,
     {
         T::build_unchecked(self, arg)
     }
+}
 
+impl<Z: Resume, S: Into<Stack>, P: PanicHook<Z>> Builder<Z, S, P> {
     /// Create a symmetric stackful coroutine.
     ///
     /// Unlike [`Builder::callcc`], the function will not be executed upon

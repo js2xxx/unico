@@ -14,7 +14,7 @@ use unico_context::{boost::Boost, Resume, Transfer};
 use unico_stack::{Global, Stack};
 
 pub use self::raw::{AbortHook, PanicHook};
-use crate::{Build, BuildUnchecked, Builder, NewError, Sealed};
+use crate::{Build, BuildUnchecked, Builder, NewError};
 
 /// A continuation of the current control flow.
 ///
@@ -63,8 +63,6 @@ impl Co<Boost> {
         Builder::new()
     }
 }
-
-impl<R: Resume> Sealed for Co<R> {}
 
 impl<F, R, S, P> Build<F, R, S, P> for Co<R>
 where

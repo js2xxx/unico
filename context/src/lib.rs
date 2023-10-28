@@ -17,7 +17,7 @@ cfg_if::cfg_if! {
 }
 mod page;
 
-use core::{alloc::Layout, ptr::NonNull};
+use core::{alloc::Layout, fmt::Debug, ptr::NonNull};
 
 /// The transfer structure between contexts.
 #[derive(Debug)]
@@ -50,7 +50,7 @@ pub unsafe trait Resume: Clone {
     type Context: 'static;
 
     /// The error type returned during creation of some context.
-    type NewError;
+    type NewError: Debug;
 
     /// Creates a new context on top of some stack.
     ///
