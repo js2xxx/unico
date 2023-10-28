@@ -1,6 +1,6 @@
 [package]
 edition = "2021"
-name = "unico-fut"
+name = "unico-async"
 version = "0.1.0"
 
 [features]

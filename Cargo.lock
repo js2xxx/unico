@@ -79,6 +79,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "unico-async"
+version = "0.1.0"
+dependencies = [
+ "pin-project",
+ "unico-context",
+ "unico-ful",
+ "unico-stack",
+]
+
+[[package]]
 name = "unico-context"
 version = "0.1.0"
 dependencies = [
@@ -94,16 +104,6 @@ dependencies = [
  "unico-context",
  "unico-stack",
  "unwinding",
-]
-
-[[package]]
-name = "unico-fut"
-version = "0.1.0"
-dependencies = [
- "pin-project",
- "unico-context",
- "unico-ful",
- "unico-stack",
 ]
 
 [[package]]

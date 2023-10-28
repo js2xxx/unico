@@ -190,11 +190,35 @@ impl<R: Resume> Co<R> {
     /// The validity of returned pointer is not guaranteed whether `payload` is
     /// valid. The caller must maintains this manually, usually by calling this
     /// function in pairs.
-    pub unsafe fn resume_with_payload(self, payload: *mut ()) -> Option<(Self, *mut ())> {
+    pub unsafe fn resume_payloaded(self, payload: *mut ()) -> (Option<Self>, *mut ()) {
         let (context, rs) = Co::into_inner(self);
         // SAFETY: See `Co::resume` for more informaion.
         let Transfer { context, data } = unsafe { rs.resume(context, payload) };
-        context.map(|context| (Co::from_inner(context, rs), data))
+        (context.map(|context| Co::from_inner(context, rs)), data)
+    }
+
+    /// Similar to [`Co::resume_with`], but with a possibly-returned pointer
+    /// payload.
+    ///
+    /// # Safety
+    ///
+    /// The validity of returned pointer is not guaranteed whether `payload` is
+    /// valid. The caller must maintains this manually, usually by calling this
+    /// function in pairs.
+    pub unsafe fn resume_with_payloaded<M: FnOnce(Self) -> Option<Self>>(
+        self,
+        map: M,
+    ) -> (Option<Self>, *mut ()) {
+        let (context, rs) = Co::into_inner(self);
+
+        let mut data = ManuallyDrop::new((rs.clone(), map));
+        let ptr = (&mut data as *mut ManuallyDrop<(R, M)>).cast();
+
+        // SAFETY: The proof is the same as the one in `Co::resume`.
+        let Transfer { context, data } =
+            unsafe { rs.resume_with(context, ptr, raw::map::<R, M>) };
+
+        (context.map(|context| Co::from_inner(context, rs)), data)
     }
 
     /// Resume the unwinding for this coroutine's partial destruction process.
