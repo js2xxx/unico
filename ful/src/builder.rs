@@ -179,7 +179,6 @@ impl<Z: Resume, S: Into<Stack>, P: PanicHook<Z>> Builder<Z, S, P> {
 /// Create a symmetric stackful coroutine.
 ///
 /// Unlike [`callcc`], the function will not be executed upon creation.
-#[cfg(feature = "global-stack-allocator")]
 pub fn spawn<F>(func: F) -> Co
 where
     F: FnOnce(Option<Co>) -> Co + Send + 'static,
@@ -195,7 +194,6 @@ where
 ///   another thread.
 /// - `func` must be `'static`, or the caller must ensure that the returned
 ///   [`Co`] not escape the lifetime of the function.
-#[cfg(feature = "global-stack-allocator")]
 pub unsafe fn spawn_unchecked<F>(func: F) -> Co
 where
     F: FnOnce(Option<Co>) -> Co,
@@ -240,7 +238,6 @@ where
 ///
 /// This function creates a symmetric stackful coroutine and immediately resume
 /// it once.
-#[cfg(feature = "global-stack-allocator")]
 pub fn callcc<F>(func: F) -> Option<Co>
 where
     F: FnOnce(Co) -> Co + Send + 'static,
@@ -256,7 +253,6 @@ where
 ///   another thread.
 /// - `func` must be `'static`, or the caller must ensure that the returned
 ///   [`Co`] not escape the lifetime of the function.
-#[cfg(feature = "global-stack-allocator")]
 pub unsafe fn callcc_unchecked<F>(func: F) -> Option<Co>
 where
     F: FnOnce(Co) -> Co,
@@ -282,7 +278,6 @@ where
 /// stack.
 ///
 /// This structure also implements [`core::ops::Coroutine`] trait.
-#[cfg(feature = "global-stack-allocator")]
 pub fn gen<'a, F, C, Y, R>(func: F) -> Gn<'a, C, Y, R>
 where
     F: FnOnce(&mut YieldHandle<Y, R>, R) -> C + Send + 'a,

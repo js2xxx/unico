@@ -221,7 +221,7 @@ impl<Y, R, Z: Resume> YieldHandle<Y, R, Z> {
     }
 }
 
-#[cfg(all(test, feature = "global-stack-allocator"))]
+#[cfg(test)]
 mod tests {
     use core::ops::CoroutineState;
 

@@ -253,7 +253,7 @@ impl<R: Resume> Drop for Co<R> {
     }
 }
 
-#[cfg(all(test, feature = "global-stack-allocator"))]
+#[cfg(test)]
 mod tests {
     use core::convert::identity;
     use std::{alloc::Global, string::String};
