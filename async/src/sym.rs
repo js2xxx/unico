@@ -1,11 +1,11 @@
 mod waker;
 
 use core::{
+    future::Future,
     pin::pin,
     task::{Context, Poll},
 };
 
-use futures_util::Future;
 use unico_context::Resume;
 use unico_ful::sym::Co;
 
@@ -16,11 +16,8 @@ pub trait Scheduler<R: Resume> {
 
     fn dequeue(&self) -> Co<R>;
 
-    fn switch_metadata(&self, co: &Co<R>);
-
-    fn switch(&self, f: impl FnOnce(Co<R>)) {
+    fn block(&self, f: impl FnOnce(Co<R>)) {
         let co = self.dequeue().resume_with(move |co| {
-            self.switch_metadata(&co);
             f(co);
             None
         });
@@ -30,29 +27,15 @@ pub trait Scheduler<R: Resume> {
     }
 
     fn yield_now(&self) {
-        self.switch(|co| self.enqueue(co))
-    }
-}
-
-impl<S: Scheduler<R>, R: Resume> Scheduler<R> for &S {
-    fn enqueue(&self, co: Co<R>) {
-        (**self).enqueue(co)
-    }
-
-    fn dequeue(&self) -> Co<R> {
-        (**self).dequeue()
-    }
-
-    fn switch_metadata(&self, co: &Co<R>) {
-        (**self).switch_metadata(co)
+        self.block(|co| self.enqueue(co))
     }
 }
 
 pub trait SymWait: Future + Send + Sized {
     fn wait<S, R>(self, sched: S) -> Self::Output
     where
-        S: Scheduler<R> + Sync,
-        R: Resume + Send + Sync,
+        S: Scheduler<R> + Send + Sync + Clone + 'static,
+        R: Resume + Send + Sync + 'static,
     {
         let waker = SchedWaker::new();
         let mut future = pin!(self);
@@ -64,7 +47,10 @@ pub trait SymWait: Future + Send + Sized {
                 .poll(&mut Context::from_waker(&waker.as_waker()))
             {
                 Poll::Ready(output) => break output,
-                Poll::Pending => sched.switch(|co| waker.set(|| sched.enqueue(co))),
+                Poll::Pending => sched.block(|co| {
+                    let sched = sched.clone();
+                    waker.set(move || sched.enqueue(co))
+                }),
             }
         }
     }
