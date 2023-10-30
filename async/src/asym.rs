@@ -6,7 +6,6 @@ use core::{
     task::{Context, Poll, Waker},
 };
 
-use pin_project::pin_project;
 use unico_ful::{
     asym::{Gn, YieldHandle},
     sym::PanicHook,
@@ -14,7 +13,6 @@ use unico_ful::{
 };
 use unico_stack::Stack;
 
-#[pin_project]
 pub struct Asym<'a, T>(Gn<'a, T, (), Waker>);
 
 pub struct AsymContext<'y> {
