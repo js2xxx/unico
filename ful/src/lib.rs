@@ -48,12 +48,8 @@ mod unwind {
         unwinding::panic::begin_panic(payload);
         unreachable!("Unwind erroneously returned.")
     }
-
-    pub fn panic_any<M: Any + Send>(msg: M) -> ! {
-        resume_unwind(Box::new(msg))
-    }
 }
 #[cfg(feature = "std")]
 mod unwind {
-    pub use std::panic::{catch_unwind, panic_any, resume_unwind};
+    pub use std::panic::{catch_unwind, resume_unwind};
 }
