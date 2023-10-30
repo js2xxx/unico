@@ -17,7 +17,7 @@ use core::{
 
 // SAFETY: The alignment is a power of 2.
 pub const DEFAULT_LAYOUT: Layout =
-    unsafe { Layout::from_size_align_unchecked(8192, 4096) };
+    unsafe { Layout::from_size_align_unchecked(4096 * 6, 4096) };
 
 /// The raw stack structure.
 ///

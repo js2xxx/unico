@@ -17,14 +17,14 @@ use crate::unwind;
 
 struct Layouts {
     layout: Layout,
-    offset_func: usize,
     offset_stack: usize,
+    offset_func: usize,
     offset_hook: usize,
 }
 
 pub(crate) struct RawCo<F, P: PanicHook> {
-    func: *mut F,
     stack: *mut Stack,
+    func: *mut F,
     panic_hook: *mut P,
 }
 
@@ -35,13 +35,15 @@ impl<F, P: PanicHook> RawCo<F, P> {
         let hook = Layout::new::<P>();
 
         let layout = Layout::new::<()>();
-        let (layout, offset_func) = ct!(extend(layout, func));
         let (layout, offset_stack) = ct!(extend(layout, stack));
+        let (layout, offset_func) = ct!(extend(layout, func));
         let (layout, offset_hook) = ct!(extend(layout, hook));
+
+        assert!(offset_stack == 0);
         Some(Layouts {
             layout,
-            offset_func,
             offset_stack,
+            offset_func,
             offset_hook,
         })
     }
@@ -58,9 +60,36 @@ impl<F, P: PanicHook> RawCo<F, P> {
     fn from_ptr(ptr: *mut ()) -> Self {
         let layouts = Self::layouts();
         RawCo {
-            func: ptr.map_addr(|addr| addr + layouts.offset_func).cast(),
             stack: ptr.map_addr(|addr| addr + layouts.offset_stack).cast(),
+            func: ptr.map_addr(|addr| addr + layouts.offset_func).cast(),
             panic_hook: ptr.map_addr(|addr| addr + layouts.offset_hook).cast(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TransferData {
+    pub raw: *mut Stack,
+    pub payload: *mut (),
+}
+
+impl TransferData {
+    pub fn as_mut(&mut self) -> *mut () {
+        (self as *mut TransferData).cast()
+    }
+
+    pub unsafe fn from_mut<'a>(data: *mut ()) -> &'a mut Self {
+        unsafe { &mut *data.cast::<Self>() }
+    }
+
+    pub unsafe fn read(data: *mut ()) -> Self {
+        if data.is_null() {
+            TransferData {
+                raw: ptr::null_mut(),
+                payload: ptr::null_mut(),
+            }
+        } else {
+            *Self::from_mut(data)
         }
     }
 }
@@ -78,7 +107,7 @@ where
         stack: Stack,
         panic_hook: P,
         func: F,
-    ) -> Result<NonNull<()>, NewError> {
+    ) -> Result<Co, NewError> {
         let layouts = Self::layouts();
         let stack_layout = stack.layout();
         if stack_layout.size() <= layouts.layout.size()
@@ -115,14 +144,14 @@ where
         // SAFETY: `raw` is created from `pointer`, which is calculated above and
         // resides somewhere unique in `stack`.
         unsafe {
-            raw.func.write(func);
             raw.stack.write(stack);
+            raw.func.write(func);
             raw.panic_hook.write(panic_hook);
         }
 
         // SAFETY: The proof is the same as the one in `Co::resume`.
         let resume = unsafe { cx::resume(context, pointer) };
-        Ok(resume.context.unwrap())
+        Ok(Co::from_inner(resume.context.unwrap(), raw.stack))
     }
 }
 
@@ -147,8 +176,9 @@ where
             // initial resume, in case of early unwinding.
             let func = unsafe { task.func.read() };
             // SAFETY: The proof is the same as the one in `Co::resume`.
-            let Transfer { context, .. } = unsafe { cx::resume(cx, ptr) };
-            func(context.map(Co::from_inner))
+            let Transfer { context, data } = unsafe { cx::resume(cx, ptr) };
+            let raw = unsafe { TransferData::read(data) }.raw;
+            func(context.map(|cx| Co::from_inner(cx, raw)))
         };
 
         #[cfg(any(feature = "unwind", feature = "std"))]
@@ -158,10 +188,10 @@ where
             let hook = hook;
             let result = unwind::catch_unwind(AssertUnwindSafe(run));
             match result {
-                Ok(co) => Co::into_inner(co),
+                Ok(co) => Co::into_inner(co).0,
                 Err(payload) => match payload.downcast::<HandleDrop<()>>() {
                     Ok(hd) => hd.0,
-                    Err(payload) => Co::into_inner(hook.rewind(payload)),
+                    Err(payload) => Co::into_inner(hook.rewind(payload)).0,
                 },
             }
         };
@@ -194,17 +224,23 @@ where
 
 /// # Safety
 ///
-/// `ptr` must offer a valid tuple of `R` and `M`.
+/// `ptr` must offer a valid tuple of `M`.
 #[allow(improper_ctypes_definitions)]
 pub(super) unsafe extern "C" fn map<M: FnOnce(Co) -> (Option<Co>, *mut ())>(
     cx: NonNull<()>,
     ptr: *mut (),
 ) -> Transfer<()> {
+    let data = unsafe { TransferData::from_mut(ptr) };
     // SAFETY: The only reading is safe by contract.
     let func = unsafe { ptr.cast::<M>().read() };
-    let (ret, data) = func(Co::from_inner(cx));
+    let (ret, payload) = func(Co::from_inner(cx, data.raw));
     Transfer {
-        context: ret.map(Co::into_inner),
-        data,
+        context: ret.map(|co| {
+            let (cx, raw) = Co::into_inner(co);
+            data.raw = raw;
+            data.payload = payload;
+            cx
+        }),
+        data: ptr,
     }
 }
