@@ -8,7 +8,7 @@ use core::{
     ptr::{self, NonNull},
 };
 
-use unico_context::{Resume, Transfer};
+use unico_context::{self as cx, Transfer};
 
 pub use self::panicking::*;
 use super::{layout::extend, Co, NewError, Stack};
@@ -22,21 +22,19 @@ struct Layouts {
     offset_hook: usize,
 }
 
-pub(crate) struct RawCo<F, R: Resume, P: PanicHook<R>> {
-    rs: *mut R,
+pub(crate) struct RawCo<F, P: PanicHook> {
     func: *mut F,
     stack: *mut Stack,
     panic_hook: *mut P,
 }
 
-impl<F, R: Resume, P: PanicHook<R>> RawCo<F, R, P> {
+impl<F, P: PanicHook> RawCo<F, P> {
     const fn eval_layouts() -> Option<Layouts> {
-        let rs = Layout::new::<R>();
         let func = Layout::new::<F>();
         let stack = Layout::new::<Stack>();
         let hook = Layout::new::<P>();
 
-        let layout = rs;
+        let layout = Layout::new::<()>();
         let (layout, offset_func) = ct!(extend(layout, func));
         let (layout, offset_stack) = ct!(extend(layout, stack));
         let (layout, offset_hook) = ct!(extend(layout, hook));
@@ -53,18 +51,13 @@ impl<F, R: Resume, P: PanicHook<R>> RawCo<F, R, P> {
     fn layouts() -> Layouts {
         match Self::LAYOUTS {
             Some(layouts) => layouts,
-            None => unreachable!(
-                "Layout evaluation failed for {} and {}",
-                type_name::<R>(),
-                type_name::<F>()
-            ),
+            None => unreachable!("Layout evaluation failed for {}", type_name::<F>()),
         }
     }
 
     fn from_ptr(ptr: *mut ()) -> Self {
         let layouts = Self::layouts();
         RawCo {
-            rs: ptr.cast(),
             func: ptr.map_addr(|addr| addr + layouts.offset_func).cast(),
             stack: ptr.map_addr(|addr| addr + layouts.offset_stack).cast(),
             panic_hook: ptr.map_addr(|addr| addr + layouts.offset_hook).cast(),
@@ -72,21 +65,20 @@ impl<F, R: Resume, P: PanicHook<R>> RawCo<F, R, P> {
     }
 }
 
-impl<F, R, P> RawCo<F, R, P>
+impl<F, P> RawCo<F, P>
 where
-    F: FnOnce(Option<Co<R>>) -> Co<R>,
-    R: Resume,
-    P: PanicHook<R>,
+    F: FnOnce(Option<Co>) -> Co,
+
+    P: PanicHook,
 {
     /// # Safety
     ///
     /// See `super::Builder::spawn_unchecked` for more information.
     pub(crate) unsafe fn new_on(
         stack: Stack,
-        rs: &R,
         panic_hook: P,
         func: F,
-    ) -> Result<NonNull<R::Context>, NewError<R>> {
+    ) -> Result<NonNull<()>, NewError> {
         let layouts = Self::layouts();
         let stack_layout = stack.layout();
         if stack_layout.size() <= layouts.layout.size()
@@ -112,7 +104,7 @@ where
         // SAFETY: The pointer in `stack` is valid according to its constructor
         // `Stack::new`.
         let context = unsafe {
-            rs.new_on(
+            cx::new_on(
                 NonNull::slice_from_raw_parts(stack.base(), rest_size),
                 Self::entry,
             )
@@ -123,32 +115,30 @@ where
         // SAFETY: `raw` is created from `pointer`, which is calculated above and
         // resides somewhere unique in `stack`.
         unsafe {
-            raw.rs.write(rs.clone());
             raw.func.write(func);
             raw.stack.write(stack);
             raw.panic_hook.write(panic_hook);
         }
 
         // SAFETY: The proof is the same as the one in `Co::resume`.
-        let resume = unsafe { rs.resume(context, pointer) };
+        let resume = unsafe { cx::resume(context, pointer) };
         Ok(resume.context.unwrap())
     }
 }
 
-impl<F, R, P> RawCo<F, R, P>
+impl<F, P> RawCo<F, P>
 where
-    F: FnOnce(Option<Co<R>>) -> Co<R>,
-    R: Resume,
-    P: PanicHook<R>,
+    F: FnOnce(Option<Co>) -> Co,
+
+    P: PanicHook,
 {
     /// # Safety
     ///
     /// `ptr` must points to a valid `RawCo` calculated from `RawCo::from_ptr`.
-    unsafe extern "C" fn entry(cx: NonNull<R::Context>, ptr: *mut ()) -> ! {
+    unsafe extern "C" fn entry(cx: NonNull<()>, ptr: *mut ()) -> ! {
         let task = Self::from_ptr(ptr);
 
         // SAFETY: The task is valid by contract.
-        let rs = unsafe { (*task.rs).clone() };
         #[cfg(any(feature = "unwind", feature = "std"))]
         let hook = unsafe { task.panic_hook.read() };
 
@@ -157,8 +147,8 @@ where
             // initial resume, in case of early unwinding.
             let func = unsafe { task.func.read() };
             // SAFETY: The proof is the same as the one in `Co::resume`.
-            let Transfer { context, .. } = unsafe { rs.resume(cx, ptr) };
-            func(context.map(|cx| Co::from_inner(cx, rs)))
+            let Transfer { context, .. } = unsafe { cx::resume(cx, ptr) };
+            func(context.map(Co::from_inner))
         };
 
         #[cfg(any(feature = "unwind", feature = "std"))]
@@ -168,10 +158,10 @@ where
             let hook = hook;
             let result = unwind::catch_unwind(AssertUnwindSafe(run));
             match result {
-                Ok(co) => Co::into_inner(co).0,
-                Err(payload) => match payload.downcast::<HandleDrop<R::Context>>() {
+                Ok(co) => Co::into_inner(co),
+                Err(payload) => match payload.downcast::<HandleDrop<()>>() {
                     Ok(hd) => hd.0,
-                    Err(payload) => Co::into_inner(hook.rewind(payload)).0,
+                    Err(payload) => Co::into_inner(hook.rewind(payload)),
                 },
             }
         };
@@ -179,7 +169,7 @@ where
         let context = Co::into_inner(run()).0;
 
         // SAFETY: The proof is the same as the one in `Co::resume`.
-        unsafe { (*task.rs).resume_with(context, ptr, Self::exit) };
+        unsafe { cx::resume_with(context, ptr, Self::exit) };
         unreachable!("Exiting failed. There's at least some dangling `Co` instance!")
     }
 
@@ -187,14 +177,10 @@ where
     ///
     /// `ptr` must points to a valid `RawCo` calculated from `RawCo::from_ptr`.
     #[allow(improper_ctypes_definitions)]
-    unsafe extern "C" fn exit(
-        _: NonNull<R::Context>,
-        ptr: *mut (),
-    ) -> Transfer<R::Context> {
+    unsafe extern "C" fn exit(_: NonNull<()>, ptr: *mut ()) -> Transfer<()> {
         let task = Self::from_ptr(ptr);
         // SAFETY: The task is valid by contract.
         unsafe {
-            ptr::drop_in_place(task.rs);
             // `stack` must not be dropped in place to avoid access to dropped stack
             // memory.
             drop(task.stack.read())
@@ -210,18 +196,15 @@ where
 ///
 /// `ptr` must offer a valid tuple of `R` and `M`.
 #[allow(improper_ctypes_definitions)]
-pub(super) unsafe extern "C" fn map<
-    R: Resume,
-    M: FnOnce(Co<R>) -> (Option<Co<R>>, *mut ()),
->(
-    cx: NonNull<R::Context>,
+pub(super) unsafe extern "C" fn map<M: FnOnce(Co) -> (Option<Co>, *mut ())>(
+    cx: NonNull<()>,
     ptr: *mut (),
-) -> Transfer<R::Context> {
+) -> Transfer<()> {
     // SAFETY: The only reading is safe by contract.
-    let (rs, func) = unsafe { ptr.cast::<(R, M)>().read() };
-    let (ret, data) = func(Co::from_inner(cx, rs));
+    let func = unsafe { ptr.cast::<M>().read() };
+    let (ret, data) = func(Co::from_inner(cx));
     Transfer {
-        context: ret.map(|co| Co::into_inner(co).0),
+        context: ret.map(Co::into_inner),
         data,
     }
 }

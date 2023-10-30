@@ -4,7 +4,6 @@ use alloc::boxed::Box;
 use core::any::Any;
 use core::ptr::NonNull;
 
-use unico_context::Resume;
 #[cfg(any(feature = "unwind", feature = "std"))]
 use unico_context::Transfer;
 
@@ -23,19 +22,16 @@ unsafe impl<C> Send for HandleDrop<C> {}
 
 #[cfg(any(feature = "unwind", feature = "std"))]
 #[allow(improper_ctypes_definitions)]
-pub(in crate::sym) extern "C" fn unwind<R: Resume>(
-    cx: NonNull<R::Context>,
-    _: *mut (),
-) -> Transfer<R::Context> {
+pub(in crate::sym) extern "C" fn unwind(cx: NonNull<()>, _: *mut ()) -> Transfer<()> {
     unwind::resume_unwind(Box::new(HandleDrop(cx)))
 }
 
 #[cfg(any(feature = "unwind", feature = "std"))]
-pub(in crate::sym) fn resume_unwind<R: Resume>(
-    _: &Co<R>,
+pub(in crate::sym) fn resume_unwind(
+    _: &Co,
     payload: Box<dyn Any + Send>,
 ) -> Box<dyn Any + Send> {
-    match payload.downcast::<HandleDrop<R::Context>>() {
+    match payload.downcast::<HandleDrop<()>>() {
         Ok(data) => unwind::resume_unwind(data),
         Err(p) => p,
     }
@@ -47,7 +43,7 @@ pub(in crate::sym) fn resume_unwind<R: Resume>(
 /// coroutine panics, the panic payload will be handled to it, which then either
 /// gives back a continuation to be passed on, or simply aborts the whole
 /// control flow, depending on its implementation.
-pub trait PanicHook<R: Resume> {
+pub trait PanicHook {
     /// The actual process of handling the panic. See [`PanicHook`] for more
     /// information.
     ///
@@ -55,7 +51,7 @@ pub trait PanicHook<R: Resume> {
     /// implements this trait. So no need to create some unit structure if the
     /// actual type is not used.
     #[cfg(any(feature = "unwind", feature = "std"))]
-    fn rewind(self, payload: Box<dyn Any + Send>) -> Co<R>;
+    fn rewind(self, payload: Box<dyn Any + Send>) -> Co;
 }
 
 /// Aborts the whole control flow if a panic is caught in the current
@@ -64,20 +60,19 @@ pub trait PanicHook<R: Resume> {
 /// See [`PanicHook`] for more information.
 pub struct AbortHook;
 
-impl<R: Resume> PanicHook<R> for AbortHook {
+impl PanicHook for AbortHook {
     #[cfg(any(feature = "unwind", feature = "std"))]
-    fn rewind(self, _: Box<dyn Any + Send>) -> Co<R> {
+    fn rewind(self, _: Box<dyn Any + Send>) -> Co {
         unreachable!("Uncaught panic in the root of a symmetric coroutine. Aborting.")
     }
 }
 
 #[cfg(any(feature = "unwind", feature = "std"))]
-impl<T, R> PanicHook<R> for T
+impl<T> PanicHook for T
 where
-    T: FnOnce(Box<dyn Any + Send>) -> Co<R>,
-    R: Resume,
+    T: FnOnce(Box<dyn Any + Send>) -> Co,
 {
-    fn rewind(self, payload: Box<dyn Any + Send>) -> Co<R> {
+    fn rewind(self, payload: Box<dyn Any + Send>) -> Co {
         self(payload)
     }
 }
