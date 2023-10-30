@@ -86,7 +86,7 @@ where
         rs: &R,
         panic_hook: P,
         func: F,
-    ) -> Result<R::Context, NewError<R>> {
+    ) -> Result<NonNull<R::Context>, NewError<R>> {
         let layouts = Self::layouts();
         let stack_layout = stack.layout();
         if stack_layout.size() <= layouts.layout.size()
@@ -144,7 +144,7 @@ where
     /// # Safety
     ///
     /// `ptr` must points to a valid `RawCo` calculated from `RawCo::from_ptr`.
-    unsafe extern "C" fn entry(cx: R::Context, ptr: *mut ()) -> ! {
+    unsafe extern "C" fn entry(cx: NonNull<R::Context>, ptr: *mut ()) -> ! {
         let task = Self::from_ptr(ptr);
 
         // SAFETY: The task is valid by contract.
@@ -187,7 +187,10 @@ where
     ///
     /// `ptr` must points to a valid `RawCo` calculated from `RawCo::from_ptr`.
     #[allow(improper_ctypes_definitions)]
-    unsafe extern "C" fn exit(_: R::Context, ptr: *mut ()) -> Transfer<R::Context> {
+    unsafe extern "C" fn exit(
+        _: NonNull<R::Context>,
+        ptr: *mut (),
+    ) -> Transfer<R::Context> {
         let task = Self::from_ptr(ptr);
         // SAFETY: The task is valid by contract.
         unsafe {
@@ -211,7 +214,7 @@ pub(super) unsafe extern "C" fn map<
     R: Resume,
     M: FnOnce(Co<R>) -> (Option<Co<R>>, *mut ()),
 >(
-    cx: R::Context,
+    cx: NonNull<R::Context>,
     ptr: *mut (),
 ) -> Transfer<R::Context> {
     // SAFETY: The only reading is safe by contract.

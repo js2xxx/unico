@@ -8,22 +8,22 @@ const CONTEXT_LEN: usize = CONTEXT_SIZE / mem::size_of::<usize>();
 /// The `fcontext_t` wrapper type in [`Boost.Context`](https://github.com/boostorg/context/).
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct Fcx(NonNull<[usize; CONTEXT_LEN]>);
+pub struct Fcx([usize; CONTEXT_LEN]);
 
 #[link(name = "boost_context")]
 extern "C" {
     /// Creates a new `Context` on top of some stack.
     #[link_name = "make_fcontext"]
-    fn new_on(stack_top: NonNull<()>, size: usize, entry: Entry<Fcx>) -> Fcx;
+    fn new_on(stack_top: NonNull<()>, size: usize, entry: Entry<Fcx>) -> NonNull<Fcx>;
 
     /// Yields the execution to another `Context`.
     #[link_name = "jump_fcontext"]
-    fn resume(target: Fcx, data: *mut ()) -> Transfer;
+    fn resume(target: NonNull<Fcx>, data: *mut ()) -> Transfer;
 
     /// Yields the execution to another `Context` and executes a function on
     /// top of that stack.
     #[link_name = "ontop_fcontext"]
-    fn resume_with(target: Fcx, data: *mut (), map: Map<Fcx>) -> Transfer;
+    fn resume_with(target: NonNull<Fcx>, data: *mut (), map: Map<Fcx>) -> Transfer;
 }
 
 pub type Transfer = crate::Transfer<Fcx>;
@@ -48,18 +48,23 @@ unsafe impl Resume for Boost {
         &self,
         stack: NonNull<[u8]>,
         entry: Entry<Fcx>,
-    ) -> Result<Fcx, NewError> {
+    ) -> Result<NonNull<Fcx>, NewError> {
         let top: NonNull<()> = stack_top(stack).ok_or(NewError::StackTooSmall)?;
         // SAFETY: The stack is valid by contract.
         Ok(unsafe { self::new_on(top, stack.len(), entry) })
     }
 
-    unsafe fn resume(&self, cx: Fcx, data: *mut ()) -> Transfer {
+    unsafe fn resume(&self, cx: NonNull<Fcx>, data: *mut ()) -> Transfer {
         // SAFETY: `cx` is valid by contract.
         unsafe { self::resume(cx, data) }
     }
 
-    unsafe fn resume_with(&self, cx: Fcx, data: *mut (), map: Map<Fcx>) -> Transfer {
+    unsafe fn resume_with(
+        &self,
+        cx: NonNull<Fcx>,
+        data: *mut (),
+        map: Map<Fcx>,
+    ) -> Transfer {
         // SAFETY: `cx` and `map` is valid by contract.
         unsafe { self::resume_with(cx, data, map) }
     }

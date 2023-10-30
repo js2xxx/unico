@@ -7,7 +7,7 @@ use alloc::boxed::Box;
 use core::any::Any;
 use core::{
     mem::{self, ManuallyDrop},
-    ptr,
+    ptr::{self, NonNull},
 };
 
 use unico_context::{boost::Boost, Resume, Transfer};
@@ -27,7 +27,7 @@ use crate::{Build, BuildUnchecked, Builder, NewError};
 /// the dropping process requires unwinding, and thus a `Box<dyn Any + Send>`.
 #[derive(Debug)]
 pub struct Co<R: Resume = Boost> {
-    context: ManuallyDrop<R::Context>,
+    context: NonNull<R::Context>,
     rs: ManuallyDrop<R>,
 }
 
@@ -40,16 +40,16 @@ unsafe impl<R: Resume + Send + Sync> Sync for Co<R> {}
 impl<R: Resume + Unpin> Unpin for Co<R> {}
 
 impl<R: Resume> Co<R> {
-    fn from_inner(context: R::Context, rs: R) -> Self {
+    fn from_inner(context: NonNull<R::Context>, rs: R) -> Self {
         Co {
-            context: ManuallyDrop::new(context),
+            context,
             rs: ManuallyDrop::new(rs),
         }
     }
 
-    fn into_inner(mut this: Self) -> (R::Context, R) {
+    fn into_inner(mut this: Self) -> (NonNull<R::Context>, R) {
         unsafe {
-            let context = ManuallyDrop::take(&mut this.context);
+            let context = this.context;
             let rs = ManuallyDrop::take(&mut this.rs);
             mem::forget(this);
             (context, rs)
@@ -241,7 +241,7 @@ impl<R: Resume> Drop for Co<R> {
         // data from these fields. The safety proof of `rx.resume_with` is the same as the
         // one in `Co::resume`.
         unsafe {
-            let cx = ManuallyDrop::take(&mut self.context);
+            let cx = self.context;
             let rs = ManuallyDrop::take(&mut self.rs);
             #[cfg(any(feature = "unwind", feature = "std"))]
             rs.resume_with(cx, ptr::null_mut(), raw::unwind::<R>);

@@ -21,9 +21,9 @@ use core::{alloc::Layout, fmt::Debug, ptr::NonNull};
 /// The transfer structure between contexts.
 #[derive(Debug)]
 #[repr(C)]
-pub struct Transfer<T> {
+pub struct Transfer<C> {
     /// The target context to be resumed.
-    pub context: Option<T>,
+    pub context: Option<NonNull<C>>,
     /// The data passed between contexts.
     ///
     /// If the user passes the transfer structure to [`Resume::resume`], the
@@ -34,9 +34,9 @@ pub struct Transfer<T> {
     pub data: *mut (),
 }
 
-pub type Entry<C> = unsafe extern "C" fn(cx: C, data: *mut ()) -> !;
+pub type Entry<C> = unsafe extern "C" fn(cx: NonNull<C>, data: *mut ()) -> !;
 #[allow(improper_ctypes_definitions)]
-pub type Map<C> = unsafe extern "C" fn(cx: C, data: *mut ()) -> Transfer<C>;
+pub type Map<C> = unsafe extern "C" fn(cx: NonNull<C>, data: *mut ()) -> Transfer<C>;
 
 /// The generic symmetric context-switching trait.
 ///
@@ -61,7 +61,7 @@ pub unsafe trait Resume: Sized + Clone + 'static {
         &self,
         stack: NonNull<[u8]>,
         entry: Entry<Self::Context>,
-    ) -> Result<Self::Context, Self::NewError>;
+    ) -> Result<NonNull<Self::Context>, Self::NewError>;
 
     /// Yields the execution to the target context 'cx' with `data` passed to
     /// the destination.
@@ -70,7 +70,11 @@ pub unsafe trait Resume: Sized + Clone + 'static {
     ///
     /// `cx` must be bound to some valid stack, and `data` must be valid
     /// according to `entry` passed to [`Resume::new_on`].
-    unsafe fn resume(&self, cx: Self::Context, data: *mut ()) -> Transfer<Self::Context>;
+    unsafe fn resume(
+        &self,
+        cx: NonNull<Self::Context>,
+        data: *mut (),
+    ) -> Transfer<Self::Context>;
 
     /// Yields the execution to the target context 'cx' with `data` passed to
     /// the destination, and executes a function on top of that stack.
@@ -82,7 +86,7 @@ pub unsafe trait Resume: Sized + Clone + 'static {
     /// `data` must be valid according to `entry` passed to [`Resume::new_on`].
     unsafe fn resume_with(
         &self,
-        cx: Self::Context,
+        cx: NonNull<Self::Context>,
         data: *mut (),
         map: Map<Self::Context>,
     ) -> Transfer<Self::Context>;
