@@ -1,3 +1,23 @@
+[package]
+edition = "2021"
+name = "unico"
+version = "0.1.0"
+
+[features]
+asym = ["unico-async/asym"]
+boost = ["unico-context/boost"]
+default = ["std", "asym", "sym", "boost"]
+std = ["unico-ful/std", "unico-async/std"]
+sym = ["unico-async/sym"]
+ucx = ["unico-context/ucx"]
+unwind = ["unico-ful/unwind", "unico-async/unwind"]
+
+[dependencies]
+unico-async = {path = "async", default-features = false}
+unico-context = {path = "context", default-features = false}
+unico-ful = {path = "ful", default-features = false}
+unico-stack = {path = "stack", default-features = false}
+
 [workspace]
 members = [
   "async",
