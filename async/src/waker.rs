@@ -14,7 +14,13 @@ pub struct ScheduleInfo {
     pub woken_while_running: bool,
 }
 
+/// The one-shot scheduling function.
+///
+/// Users implementing this trait can retrieve some [schedule
+/// information](ScheduleInfo) from the scheduling process, such as the waker is
+/// woken during polling.
 pub trait Schedule {
+    /// See the documentation of the trait for more information.
     fn schedule(self, info: ScheduleInfo);
 }
 
@@ -24,6 +30,8 @@ impl<F: FnOnce()> Schedule for F {
     }
 }
 
+/// The wrapper for construct an instance of [`Schedule`] from one-shot
+/// scheduling functions that relies on [`ScheduleInfo`].
 pub struct WithInfo<F>(pub F);
 
 impl<F: FnOnce(ScheduleInfo)> Schedule for WithInfo<F> {
@@ -57,6 +65,14 @@ impl<S: Schedule> State<S> {
     }
 }
 
+/// A [`Waker`] that calls a one-shot scheduling function.
+///
+/// Note that this is different from [`waker-fn`], which requires the function
+/// to implement [`Fn`]. To achieve this, every time the target future is
+/// polled, a inner state machine is implemented and a new instance of this
+/// function should be assigned to this structure.
+///
+/// `waker-fn`: https://crates.io/crates/waker-fn
 pub struct SchedWaker<S> {
     inner: Mutex<State<S>>,
 }
@@ -68,6 +84,11 @@ impl<S: Schedule + Send + 'static> SchedWaker<S> {
         })
     }
 
+    /// Set the one-shot scheduling function of the waker.
+    ///
+    /// This function should be called right after
+    /// [`polling`](core::future::Future::poll) the future, if the result turns
+    /// out to be [pending](core::task::Poll::Pending).
     pub fn set(&self, schedule: S) {
         let mut inner = self.inner.lock();
         let next = match mem::take(&mut *inner) {
@@ -83,10 +104,18 @@ impl<S: Schedule + Send + 'static> SchedWaker<S> {
         *inner = next;
     }
 
+    /// Clear the state of the waker.
+    ///
+    /// This function should be called right before
+    /// [`polling`](core::future::Future::poll) the future.
     pub fn reset(&self) {
         *self.inner.lock() = State::Init;
     }
 
+    /// Get a [`Waker`] reference from the waker.
+    ///
+    /// The standard library implements [`Into<Waker>`] for this structure, so
+    /// use this method instead of possible redundant clones.
     pub fn as_waker<'a>(self: &'a Arc<Self>) -> WakerRef<'a> {
         self.into()
     }
@@ -105,6 +134,7 @@ impl<S: Schedule> Wake for SchedWaker<S> {
     }
 }
 
+/// A [`Waker`] reference.
 pub struct WakerRef<'a> {
     inner: ManuallyDrop<Waker>,
     marker: PhantomData<&'a Waker>,
