@@ -72,7 +72,7 @@ impl<S: Schedule> State<S> {
 /// polled, a inner state machine is implemented and a new instance of this
 /// function should be assigned to this structure.
 ///
-/// `waker-fn`: https://crates.io/crates/waker-fn
+/// `waker-fn`: <https://crates.io/crates/waker-fn>
 pub struct SchedWaker<S> {
     inner: Mutex<State<S>>,
 }
