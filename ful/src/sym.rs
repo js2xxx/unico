@@ -28,9 +28,9 @@ static CUR: Cell<*mut ()> = Cell::new(ptr::null_mut());
 /// coroutine.
 ///
 /// Note that if neither `unwind` nor `std` feature is enabled and the coroutine
-/// is dropped while not resumed to end, all the data on the call stack
-/// alongside with the whole stack allocation will be ***LEAKED***. It's because
-/// the dropping process requires unwinding, and thus a `Box<dyn Any + Send>`.
+/// is dropped while not resumed to end, all the data on the call stack will be
+/// ***LEAKED***. It's because the dropping process requires unwinding, and thus
+/// a `Box<dyn Any + Send>`.
 #[derive(Debug)]
 pub struct Co {
     cx: NonNull<()>,
@@ -103,10 +103,49 @@ impl Co {
     /// alongside with this object's ownership. Note that the return value may
     /// not be the same [`Co`] as the callee because this method is symmetric.
     pub fn resume(self) -> Option<Self> {
+        // SAFETY: The payload pointers are unspecified and unused.
+        unsafe { self.resume_payloaded(ptr::null_mut()).0 }
+    }
+
+    /// Similar to [`Co::resume`], but maps the source of this continuation,
+    /// a.k.a. the caller of this method, to another one if possible.
+    ///
+    /// This method resumes the continuation, and then executes `map` on the
+    /// call stack of that continuation. The only argument of `map` is the
+    /// current control flow calling this method.
+    ///
+    /// Note that `M` doesn't requires extra trait and lifetime bounds:
+    ///
+    /// - `M` need not to be [`Send`] because the function will be executed on
+    ///   the same execution unit (such as the same thread in user space or the
+    ///   same CPU core in kernel) right after the stack switch.
+    /// - `M` need not to be `'static` because all the instances of [`Co`] are
+    ///   `'static` by default or its lifetime should be managed by the caller;
+    ///   since both the source (the current call stack) and the destination
+    ///   (`self`) of the current control flow transfer are valid at the time,
+    ///   the function will be called (consumed) before the transfer completes,
+    ///   and thus unable to escape its own lifetime.
+    pub fn resume_with<M: FnOnce(Self) -> Option<Self>>(self, map: M) -> Option<Self> {
+        let map = move |co| {
+            let co = map(co);
+            (co, ptr::null_mut())
+        };
+        // SAFETY: The payload pointers are unspecified and unused.
+        unsafe { self.resume_with_payloaded(map).0 }
+    }
+
+    /// Similar to [`Co::resume`], but with a pointer payload.
+    ///
+    /// # Safety
+    ///
+    /// The validity of returned pointer is not guaranteed whether `payload` is
+    /// valid. The caller must maintains this manually, usually by calling this
+    /// function in pairs.
+    pub unsafe fn resume_payloaded(self, payload: *mut ()) -> (Option<Self>, *mut ()) {
         let (cx, raw) = Co::into_inner(self);
         let mut data = TransferData {
             raw: CUR.replace(raw.cast()).cast(),
-            payload: ptr::null_mut(),
+            payload,
         };
         // SAFETY: `cx`'s lifetime is bound to its own coroutine, and it is ALWAYS
         // THE UNIQUE REFERENCE to the runtime stack. The proof is divided into 2
@@ -142,53 +181,10 @@ impl Co {
         //    Thus, though the naming of variables will be a bit rough, the statement
         // actually proves to be true.
         let Transfer { context, data } = unsafe { cx::resume(cx, data.as_mut()) };
+        // SAFETY: The pointer is always valid according to all the calling of
+        // `cx::resume`, `cx::resume_with` except the initial and final ones.
         let data = unsafe { TransferData::read(data) };
-        context.map(|cx| Co::from_inner(cx, data.raw))
-    }
 
-    /// Similar to [`Co::resume`], but maps the source of this continuation,
-    /// a.k.a. the caller of this method, to another one if possible.
-    ///
-    /// This method resumes the continuation, and then executes `map` on the
-    /// call stack of that continuation. The only argument of `map` is the
-    /// current control flow calling this method.
-    ///
-    /// Note that `M` doesn't requires extra trait and lifetime bounds:
-    ///
-    /// - `M` need not to be [`Send`] because the function will be executed on
-    ///   the same execution unit (such as the same thread in user space or the
-    ///   same CPU core in kernel) right after the stack switch.
-    /// - `M` need not to be `'static` because all the instances of [`Co`] are
-    ///   `'static` by default or its lifetime should be managed by the caller;
-    ///   since both the source (the current call stack) and the destination
-    ///   (`self`) of the current control flow transfer are valid at the time,
-    ///   the function will be called (consumed) before the transfer completes,
-    ///   and thus unable to escape its own lifetime.
-    pub fn resume_with<M: FnOnce(Self) -> Option<Self>>(self, map: M) -> Option<Self> {
-        let map = move |co| {
-            let co = map(co);
-            (co, ptr::null_mut())
-        };
-        // SAFETY: The payload is unspecified.
-        unsafe { self.resume_with_payloaded(map).0 }
-    }
-
-    /// Similar to [`Co::resume`], but with a pointer payload.
-    ///
-    /// # Safety
-    ///
-    /// The validity of returned pointer is not guaranteed whether `payload` is
-    /// valid. The caller must maintains this manually, usually by calling this
-    /// function in pairs.
-    pub unsafe fn resume_payloaded(self, payload: *mut ()) -> (Option<Self>, *mut ()) {
-        let (cx, raw) = Co::into_inner(self);
-        let mut data = TransferData {
-            raw: CUR.replace(raw.cast()).cast(),
-            payload,
-        };
-        // SAFETY: See `Co::resume` for more informaion.
-        let Transfer { context, data } = unsafe { cx::resume(cx, data.as_mut()) };
-        let data = unsafe { TransferData::read(data) };
         (context.map(|cx| Co::from_inner(cx, data.raw)), data.payload)
     }
 
@@ -214,9 +210,12 @@ impl Co {
             payload: ptr,
         };
 
-        // SAFETY: The proof is the same as the one in `Co::resume`.
+        // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
         let Transfer { context, data } =
             unsafe { cx::resume_with(cx, data.as_mut(), raw::map::<M>) };
+        // SAFETY: The pointer is always valid according to all the calling of
+        // `cx::resume`, `cx::resume_with` except the initial and final ones. See
+        // `raw::map` for more information.
         let data = unsafe { TransferData::read(data) };
 
         (context.map(|cx| Co::from_inner(cx, data.raw)), data.payload)
@@ -242,15 +241,22 @@ impl Co {
 impl Drop for Co {
     fn drop(&mut self) {
         #[allow(unused_variables)]
-        // SAFETY： We don't use `self.cx` and `self.rs` any longer after taking out
-        // data from these fields. The safety proof of `rx.resume_with` is the same as the
-        // one in `Co::resume`.
+        // SAFETY： We don't use `self.cx` and `self.raw` any longer after taking out data
+        // from these fields. The safety proof of `cx::resume_with` is the same as the
+        // one in `Co::resume_payloaded`.
         unsafe {
             let cx = self.cx;
             let raw = self.raw;
             if !raw.is_null() {
                 #[cfg(any(feature = "unwind", feature = "std"))]
-                cx::resume_with(cx, ptr::null_mut(), raw::unwind);
+                {
+                    let old = CUR.replace(raw.cast());
+                    cx::resume_with(cx, old, raw::unwind);
+                }
+                #[cfg(not(any(feature = "unwind", feature = "std")))]
+                unsafe {
+                    ptr::drop_in_place(raw)
+                };
             }
         }
     }
@@ -258,13 +264,13 @@ impl Drop for Co {
 
 #[cfg(test)]
 mod tests {
-    use core::convert::identity;
+    use core::{convert::identity, ptr};
     use std::{alloc::Global, string::String};
 
     use unico_context::{boost::Boost, global_resumer};
     use unico_stack::global_stack_allocator;
 
-    use crate::{callcc, spawn, spawn_unchecked};
+    use crate::{callcc, spawn, spawn_unchecked, sym::CUR};
 
     global_stack_allocator!(Global);
     global_resumer!(Boost);
@@ -272,11 +278,13 @@ mod tests {
     #[test]
     fn creation() {
         spawn(Option::unwrap);
+        assert_eq!(CUR.get(), ptr::null_mut());
     }
 
     #[test]
     fn empty() {
         assert!(callcc(identity).is_none());
+        assert_eq!(CUR.get(), ptr::null_mut());
     }
 
     #[test]
@@ -287,6 +295,7 @@ mod tests {
                 .spawn(|_| panic!("What the fuck?"))
                 .unwrap()
         });
+        assert_eq!(CUR.get(), ptr::null_mut());
     }
 
     #[test]
@@ -297,6 +306,7 @@ mod tests {
             co
         });
         assert!(ret.is_none());
+        assert_eq!(CUR.get(), ptr::null_mut());
     }
 
     #[test]
@@ -318,6 +328,7 @@ mod tests {
             }
         }
         assert_eq!(counter, 10);
+        assert_eq!(CUR.get(), ptr::null_mut());
     }
 
     #[test]
@@ -332,10 +343,12 @@ mod tests {
         });
         let ret = b.resume();
         assert!(ret.is_none());
+        assert_eq!(CUR.get(), ptr::null_mut());
     }
 
     #[test]
     fn symmetric_direct() {
         assert!(callcc(|a| spawn(move |_| a)).is_none());
+        assert_eq!(CUR.get(), ptr::null_mut());
     }
 }
