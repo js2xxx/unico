@@ -4,7 +4,7 @@ UNICO is a library that integrates the built-in stackless coroutines (a.k.a. [ge
 
 ## Features
 
-- Straightforward and easy-to-use structures of symmetric and asymetric stackful coroutines.
+- Straightforward and easy-to-use structures of symmetric and asymmetric stackful coroutines.
 - Generalized implementation of context switching methods and stack allocators, and users can implement their own.
 - Capability of polling futures synchronously inside stackful coroutines, and turning stackful coroutines into generators or futures.
 
