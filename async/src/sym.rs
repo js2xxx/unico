@@ -55,7 +55,7 @@ impl<M: Switch> Task<M> {
 ///
 /// The switch method must perform a valid switch on some "current" state, which
 /// any scheduler with task metadata implementing this trait relies on.
-pub unsafe trait Switch {
+pub unsafe trait Switch: 'static {
     /// Switch on `self` as the new "current" state, and return the old state.
     ///
     /// See [the documentation on the trait](Switch) for more information about
@@ -73,25 +73,18 @@ unsafe impl Switch for () {
 /// This trait only concerns about "run queues", not "wait queues". The user
 /// should use [`Waker`](core::task::Waker)s for the item of their own wait
 /// queues.
-pub trait Scheduler: Sized + Clone + 'static {
-    /// The metadata of the scheduled [`Task`]s.
-    type Metadata: Switch;
-
+pub trait Scheduler<M: Switch>: Sized + Clone + 'static {
     /// Push a task to a run queue of the scheduler for execution.
-    fn enqueue(&self, task: Task<Self::Metadata>);
+    fn enqueue(&self, task: Task<M>);
 
     /// Pop a task from a run queue of the scheduler for execution.
-    fn dequeue(&self) -> Option<Task<Self::Metadata>>;
+    fn dequeue(&self) -> Option<Task<M>>;
 
     /// Yield the current running task to another.
     ///
     /// `f` decides whether the current running task should be moved to a wait
     /// queue for some event, or be re-enqueue immediately (a.k.a. yielded).
-    fn yield_to(
-        &self,
-        next: Task<Self::Metadata>,
-        f: impl FnOnce(Task<Self::Metadata>) -> Option<Task<Self::Metadata>>,
-    ) {
+    fn yield_to(&self, next: Task<M>, f: impl FnOnce(Task<M>) -> Option<Task<M>>) {
         let other = next.co.resume_with(|co| {
             let metadata = next.metadata.switch();
             if let Some(next) = f(Task { co, metadata }) {
@@ -106,10 +99,7 @@ pub trait Scheduler: Sized + Clone + 'static {
     ///
     /// `f` decides whether the current running task should be moved to a wait
     /// queue for some event, or be re-enqueue immediately (a.k.a. yielded).
-    fn schedule(
-        &self,
-        f: impl FnOnce(Task<Self::Metadata>) -> Option<Task<Self::Metadata>>,
-    ) {
+    fn schedule(&self, f: impl FnOnce(Task<M>) -> Option<Task<M>>) {
         if let Some(next) = self.dequeue() {
             self.yield_to(next, f)
         }
@@ -127,9 +117,9 @@ pub trait Scheduler: Sized + Clone + 'static {
     fn spawn<F, S, P>(
         self,
         builder: Builder<S, P>,
-        metadata: Self::Metadata,
+        metadata: M,
         f: F,
-    ) -> Result<Task<Self::Metadata>, NewError>
+    ) -> Result<Task<M>, NewError>
     where
         F: FnOnce(&Self) + Send + 'static,
         S: Into<Stack>,
@@ -156,10 +146,10 @@ pub trait Scheduler: Sized + Clone + 'static {
 
 pub trait SymWait: Future + Send + Sized {
     /// Wait on a future "synchronously".
-    fn wait<S, R>(self, sched: S) -> Self::Output
+    fn wait<S, R, M>(self, sched: &S) -> Self::Output
     where
-        S: Scheduler + Send + Sync,
-        <S as Scheduler>::Metadata: Send,
+        S: Scheduler<M> + Send + Sync,
+        M: Switch + Send,
     {
         let waker = SchedWaker::new();
         let mut future = pin!(self);
