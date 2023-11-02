@@ -87,7 +87,7 @@ impl<S: Schedule + Send + 'static> SchedWaker<S> {
     /// Set the one-shot scheduling function of the waker.
     ///
     /// This function should be called right after
-    /// [`polling`](core::future::Future::poll) the future, if the result turns
+    /// [polling](core::future::Future::poll) the future, if the result turns
     /// out to be [pending](core::task::Poll::Pending).
     pub fn set(&self, schedule: S) {
         let mut inner = self.inner.lock();
@@ -107,7 +107,8 @@ impl<S: Schedule + Send + 'static> SchedWaker<S> {
     /// Clear the state of the waker.
     ///
     /// This function should be called right before
-    /// [`polling`](core::future::Future::poll) the future.
+    /// [polling](core::future::Future::poll) the future, if the waker is
+    /// previously set.
     pub fn reset(&self) {
         *self.inner.lock() = State::Init;
     }

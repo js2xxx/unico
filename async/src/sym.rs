@@ -7,6 +7,7 @@
 
 use core::{
     future::Future,
+    hint,
     pin::pin,
     task::{Context, Poll},
 };
@@ -99,17 +100,19 @@ pub trait Scheduler<M: Switch = ()>: Sized + Clone + 'static {
     ///
     /// `f` decides whether the current running task should be moved to a wait
     /// queue for some event, or be requeued immediately (a.k.a. yielded).
-    fn schedule(&self, f: impl FnOnce(Task<M>) -> Option<Task<M>>) {
+    fn schedule(&self, f: impl FnOnce(Task<M>) -> Option<Task<M>>) -> bool {
         if let Some(next) = self.dequeue() {
-            self.yield_to(next, f)
+            self.yield_to(next, f);
+            return true;
         }
+        false
     }
 
     /// Yield the current running task to the scheduler.
     ///
     /// This method is a shorthand for
     /// [`schedule(Some)`](Scheduler::schedule).
-    fn yield_now(&self) {
+    fn yield_now(&self) -> bool {
         self.schedule(Some)
     }
 
@@ -126,18 +129,14 @@ pub trait Scheduler<M: Switch = ()>: Sized + Clone + 'static {
         P: PanicHook,
         Self: Send,
     {
-        let co = builder.spawn(move |other: Option<Co>| {
+        let co = builder.spawn(move |other| {
             assert!(other.is_none(), "A task escaped from enqueueing!");
             f(&self);
             loop {
-                if let Some(task) = self.dequeue() {
-                    task.co.resume_with(|co| {
-                        let metadata = task.metadata.switch();
-                        drop(Task { co, metadata });
-                        None
-                    });
+                if self.schedule(|_| None) {
                     unreachable!("Zombie task detected!")
                 }
+                hint::spin_loop()
             }
         })?;
         Ok(Task { co, metadata })
@@ -154,18 +153,21 @@ pub trait SymWait: Future + Send + Sized {
         let waker = SchedWaker::new();
         let mut future = pin!(self);
         loop {
-            waker.reset();
-
             match future
                 .as_mut()
                 .poll(&mut Context::from_waker(&waker.as_waker()))
             {
                 Poll::Ready(output) => break output,
-                Poll::Pending => sched.schedule(|co| {
-                    let sched = sched.clone();
-                    waker.set(move || sched.enqueue(co));
-                    None
-                }),
+                Poll::Pending => {
+                    let scheduled = sched.schedule(|co| {
+                        let sched = sched.clone();
+                        waker.set(move || sched.enqueue(co));
+                        None
+                    });
+                    if scheduled {
+                        waker.reset();
+                    }
+                }
             }
         }
     }
