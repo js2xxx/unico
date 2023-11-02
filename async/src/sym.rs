@@ -176,3 +176,63 @@ pub trait SymWait: Future + Send + Sized {
     }
 }
 impl<F: Future + Send + Sized> SymWait for F {}
+
+#[cfg(test)]
+mod tests {
+    use alloc::{alloc::Global, collections::VecDeque, sync::Arc};
+    use std::println;
+
+    use spin::Mutex;
+    use unico_context::{boost::Boost, global_resumer};
+    use unico_stack::global_stack_allocator;
+
+    use super::{Scheduler, Task};
+
+    global_resumer!(Boost);
+    global_stack_allocator!(Global);
+
+    struct Fifo(Mutex<VecDeque<Task>>);
+
+    impl Scheduler for Arc<Fifo> {
+        fn enqueue(&self, task: Task<()>) {
+            self.0.lock().push_back(task)
+        }
+
+        fn dequeue(&self) -> Option<Task<()>> {
+            self.0.lock().pop_front()
+        }
+    }
+
+    impl Drop for Fifo {
+        fn drop(&mut self) {
+            println!("Dropped");
+        }
+    }
+
+    #[test]
+    fn basic() {
+        let sched = Arc::new(Fifo(Mutex::new(VecDeque::new())));
+        let t1 = sched
+            .clone()
+            .spawn(Default::default(), (), |s| {
+                println!("1");
+                s.yield_now();
+                println!("2");
+            })
+            .unwrap();
+        let t2 = sched
+            .clone()
+            .spawn(Default::default(), (), |s| {
+                println!("3");
+                s.yield_now();
+                println!("4");
+            })
+            .unwrap();
+        sched.enqueue(t2);
+        println!("Start");
+        sched.yield_to(t1, Some);
+        println!("5");
+        sched.yield_now();
+        println!("6\nEnd");
+    }
+}

@@ -234,7 +234,7 @@ where
 
 /// # Safety
 ///
-/// `ptr` must offer a valid tuple of `M`.
+/// `ptr` must offer a valid `M`.
 #[allow(improper_ctypes_definitions)]
 pub(super) unsafe extern "C" fn map<M: FnOnce(Co) -> (Option<Co>, *mut ())>(
     cx: NonNull<()>,
@@ -243,7 +243,7 @@ pub(super) unsafe extern "C" fn map<M: FnOnce(Co) -> (Option<Co>, *mut ())>(
     // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
     let data = unsafe { TransferData::from_mut(ptr) };
     // SAFETY: The only reading is safe by contract.
-    let func = unsafe { ptr.cast::<M>().read() };
+    let func = unsafe { data.payload.cast::<M>().read() };
     let (ret, payload) = func(Co::from_inner(cx, data.raw));
     Transfer {
         context: ret.map(|co| {
