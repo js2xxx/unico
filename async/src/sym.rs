@@ -100,6 +100,9 @@ pub trait Scheduler<M: Switch = ()>: Sized + Clone + 'static {
     ///
     /// `f` decides whether the current running task should be moved to a wait
     /// queue for some event, or be requeued immediately (a.k.a. yielded).
+    ///
+    /// Note that this function will not perform the context switch if there's
+    /// no other schedulable tasks, which the boolean return value indicates.
     fn schedule(&self, f: impl FnOnce(Task<M>) -> Option<Task<M>>) -> bool {
         if let Some(next) = self.dequeue() {
             self.yield_to(next, f);
