@@ -6,8 +6,6 @@
 pub mod asym;
 #[cfg(feature = "sym")]
 pub mod sym;
-#[cfg(feature = "sym")]
-pub mod waker;
 
 #[cfg(feature = "sym")]
 extern crate alloc;
