@@ -2,7 +2,7 @@ use alloc::{sync::Arc, task::Wake};
 use core::{
     fmt,
     marker::PhantomData,
-    mem::{self, discriminant, ManuallyDrop},
+    mem::{self, ManuallyDrop},
     ops::Deref,
     ptr,
     task::Waker,
@@ -15,10 +15,9 @@ use super::{Scheduler, Switch, Task};
 #[derive(Default, Debug)]
 enum State<M: Switch> {
     #[default]
-    Init,
-    WokenWhileRunning,
+    Empty,
+    Notified,
     Waiting(Task<M>),
-    Woken,
 }
 
 struct Inner<S: Scheduler> {
@@ -26,20 +25,9 @@ struct Inner<S: Scheduler> {
     state: Mutex<State<S::Metadata>>,
 }
 
-impl<S: Scheduler> Inner<S> {
-    fn wake(&self) {
-        let mut inner = self.state.lock();
-        let next = match mem::take(&mut *inner) {
-            State::Waiting(task) => {
-                self.sched.enqueue(task);
-                State::Woken
-            }
-            State::Woken => State::Woken,
-            _ => State::WokenWhileRunning,
-        };
-        *inner = next;
-    }
-}
+unsafe impl<S: Scheduler + Send + Sync> Sync for Inner<S> {}
+
+impl<S: Scheduler> Inner<S> {}
 
 pub struct SchedContext<S: Scheduler>(Arc<Inner<S>>);
 
@@ -57,6 +45,8 @@ where
 }
 
 impl<S: Scheduler> SchedContext<S> {
+    /// We don't make this function public to prevent users from calling `wait`
+    /// in other tasks.
     pub(crate) fn new(sched: S) -> Self {
         SchedContext(Arc::new(Inner {
             sched,
@@ -67,27 +57,17 @@ impl<S: Scheduler> SchedContext<S> {
     /// Park the current task for [`wake`](Waker::wake) to be called somewhere
     /// else.
     pub fn wait(&self) {
-        let scheduled = self.0.sched.schedule(|task| {
-            let mut inner = self.0.state.lock();
-            let next = match mem::take(&mut *inner) {
-                State::WokenWhileRunning => {
-                    self.0.sched.enqueue(task);
-                    State::Woken
-                }
-                State::Init => State::Waiting(task),
-                s => unreachable!("invalid state {:?}", discriminant(&s)),
-            };
-            *inner = next;
-            None
-        });
-        if scheduled {
-            *self.0.state.lock() = State::Init;
+        loop {
+            let mut state = self.0.state.lock();
+            match mem::take(&mut *state) {
+                State::Notified => break,
+                State::Empty => self.0.sched.schedule(move |task| {
+                    *state = State::Waiting(task);
+                    None
+                }),
+                State::Waiting(_) => unreachable!("cannot call `wait` on other tasks"),
+            }
         }
-    }
-
-    /// Wake this task.
-    pub fn wake(&self) {
-        (*self.0).wake()
     }
 }
 
@@ -114,11 +94,14 @@ impl<S: Scheduler + Send + Sync + 'static> SchedContext<S> {
 
 impl<S: Scheduler> Wake for Inner<S> {
     fn wake(self: Arc<Self>) {
-        (*self).wake()
+        self.wake_by_ref()
     }
 
     fn wake_by_ref(self: &Arc<Self>) {
-        (**self).wake()
+        let state = mem::replace(&mut *self.state.lock(), State::Notified);
+        if let State::Waiting(task) = state {
+            self.sched.enqueue(task);
+        }
     }
 }
 

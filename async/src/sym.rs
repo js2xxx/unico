@@ -110,9 +110,30 @@ pub trait Scheduler: Sized {
     /// `f` decides whether the current running task should be moved to a wait
     /// queue for some event, or be requeued immediately (a.k.a. yielded).
     ///
+    /// This function is similar to [`try_schedule`](Scheduler::try_schedule),
+    /// but spins when there's no other schedulable tasks.
+    fn schedule<F>(&self, f: F)
+    where
+        F: FnOnce(Task<Self::Metadata>) -> Option<Task<Self::Metadata>>,
+    {
+        loop {
+            if let Some(next) = self.dequeue() {
+                self.yield_to(next, f);
+                break;
+            }
+            hint::spin_loop()
+        }
+    }
+
+    /// Try to schedule the current running task for another chance for
+    /// execution.
+    ///
+    /// `f` decides whether the current running task should be moved to a wait
+    /// queue for some event, or be requeued immediately (a.k.a. yielded).
+    ///
     /// Note that this function will not perform the context switch if there's
     /// no other schedulable tasks, which the boolean return value indicates.
-    fn schedule<F>(&self, f: F) -> bool
+    fn try_schedule<F>(&self, f: F) -> bool
     where
         F: FnOnce(Task<Self::Metadata>) -> Option<Task<Self::Metadata>>,
     {
@@ -126,9 +147,9 @@ pub trait Scheduler: Sized {
     /// Yield the current running task to the scheduler.
     ///
     /// This method is a shorthand for
-    /// [`schedule(Some)`](Scheduler::schedule).
+    /// [`try_schedule(Some)`](Scheduler::schedule).
     fn yield_now(&self) -> bool {
-        self.schedule(Some)
+        self.try_schedule(Some)
     }
 
     /// Spawn a new [`Task`] controlled by this scheduler.
@@ -139,21 +160,17 @@ pub trait Scheduler: Sized {
         f: F,
     ) -> Result<Task<Self::Metadata>, NewError>
     where
-        F: FnOnce(&SchedContext<Self>) + Send + 'static,
+        F: FnOnce(&mut SchedContext<Self>) + Send + 'static,
         S: Into<Stack>,
         P: PanicHook,
         Self: Send + 'static,
     {
         let co = builder.spawn(move |other| {
             assert!(other.is_none(), "A task escaped from enqueueing!");
-            let cx = SchedContext::new(self);
-            f(&cx);
-            loop {
-                if cx.schedule(|_| None) {
-                    unreachable!("Zombie task detected!")
-                }
-                hint::spin_loop()
-            }
+            let mut cx = SchedContext::new(self);
+            f(&mut cx);
+            cx.schedule(|_| None);
+            unreachable!("Zombie task detected!")
         })?;
         Ok(Task { co, metadata })
     }
@@ -173,7 +190,7 @@ impl<T: Deref<Target = S>, S: Scheduler> Scheduler for T {
 
 pub trait SymWait: Future + Send + Sized {
     /// Wait on a future "synchronously".
-    fn wait<S, R, M>(self, cx: &SchedContext<S>) -> Self::Output
+    fn wait<S, R, M>(self, cx: &mut SchedContext<S>) -> Self::Output
     where
         S: Scheduler<Metadata = M> + Send + Sync + 'static,
         M: Switch + Send,
@@ -199,6 +216,7 @@ mod tests {
 
     use spin::Mutex;
     use unico_context::{boost::Boost, global_resumer};
+    use unico_ful::Builder;
     use unico_stack::global_stack_allocator;
 
     use super::{Scheduler, Task};
@@ -229,27 +247,36 @@ mod tests {
     #[test]
     fn basic() {
         let sched = Arc::new(Fifo(Mutex::new(VecDeque::new())));
-        let t1 = sched
-            .clone()
-            .spawn(Default::default(), (), |s| {
-                println!("1");
-                s.yield_now();
-                println!("2");
-            })
-            .unwrap();
-        let t2 = sched
-            .clone()
-            .spawn(Default::default(), (), |s| {
-                println!("3");
-                s.yield_now();
-                println!("4");
-            })
-            .unwrap();
-        sched.enqueue(t2);
+        let t1 = sched.clone().spawn(Default::default(), (), |s| {
+            println!("1");
+            s.yield_now();
+            println!("2");
+        });
+        let t2 = sched.clone().spawn(Default::default(), (), |s| {
+            println!("3");
+            s.yield_now();
+            println!("4");
+        });
+        sched.enqueue(t2.unwrap());
         println!("Start");
-        sched.yield_to(t1, Some);
+        sched.yield_to(t1.unwrap(), Some);
         println!("5");
-        sched.yield_now();
+        assert!(sched.yield_now());
         println!("6\nEnd");
+        assert!(!sched.yield_now());
+    }
+
+    #[test]
+    fn panicked() {
+        let sched = Arc::new(Fifo(Mutex::new(VecDeque::new())));
+        let s2 = sched.clone();
+        let s3 = sched.clone();
+        let builder = Builder::new().hook_panic_with(move |_| {
+            s2.schedule(|_| None);
+            unreachable!()
+        });
+        let p = s3.spawn(builder, (), |_| panic!("What the fuck?"));
+        sched.yield_to(p.unwrap(), Some);
+        assert!(!sched.yield_now());
     }
 }

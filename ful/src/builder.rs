@@ -7,6 +7,7 @@ use crate::{
 };
 
 /// The generic builder for the initialization of some coroutine.
+#[derive(Debug, Clone, Copy)]
 pub struct Builder<S, P> {
     pub stack: S,
     pub panic_hook: P,

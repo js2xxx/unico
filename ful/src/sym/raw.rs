@@ -194,14 +194,29 @@ where
         let (context, next) = {
             // Move the hook in the braces to make sure it drops when the control flow
             // goes out of the scope.
-            let hook = hook;
-            match unwind::catch_unwind(AssertUnwindSafe(run)) {
-                Ok(co) => Co::into_inner(co),
-                Err(payload) => match payload.downcast::<HandleDrop>() {
-                    Ok(hd) => (hd.cx, hd.raw),
-                    Err(payload) => Co::into_inner(hook.rewind(payload)),
-                },
-            }
+            let rewind = |payload| AssertUnwindSafe(|| hook.rewind(payload));
+            let run = || {
+                // Run the main function and catches its panic (or unwound `HandleDrop`)
+                // if possible.
+                let payload = match unwind::catch_unwind(AssertUnwindSafe(run)) {
+                    Ok(co) => return Co::into_inner(co),
+                    Err(payload) => match payload.downcast::<HandleDrop>() {
+                        Ok(hd) => return (hd.cx, hd.raw),
+                        Err(payload) => payload,
+                    },
+                };
+                // If the panic is caught, rewind it and catches the panic hook's own
+                // possible unwound `HandleDrop`. If another unexpected panic is caught,
+                // abort the current control flow.
+                match unwind::catch_unwind(rewind(payload)) {
+                    Ok(co) => Co::into_inner(co),
+                    Err(payload) => match payload.downcast::<HandleDrop>() {
+                        Ok(hd) => (hd.cx, hd.raw),
+                        Err(payload) => Co::into_inner(AbortHook.rewind(payload)),
+                    },
+                }
+            };
+            run()
         };
         #[cfg(not(any(feature = "unwind", feature = "std")))]
         let (context, next) = Co::into_inner(run());
