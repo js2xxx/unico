@@ -16,4 +16,5 @@ unico-context = {path = "../context", default-features = false, features = ["boo
 unico-ful = {path = "../ful", default-features = false}
 unico-stack = {path = "../stack", default-features = false}
 # External crates
+bevy_utils_proc_macros = "0"
 spin = "0.9"

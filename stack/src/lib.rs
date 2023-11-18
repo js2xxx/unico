@@ -223,11 +223,12 @@ unsafe impl StackAllocator for Global {
 /// Define a global stack allocator so that [`Global`] can be used in general.
 ///
 /// This macro works just like `#[global_allocator]` attribute, except it only
-/// receives the ident, while the actual definition can lie elsewhere.
+/// receives the path of the target static variable, while the actual definition
+/// can lie elsewhere.
 #[allow_internal_unstable(allocator_api)]
 #[macro_export]
 macro_rules! global_stack_allocator {
-    ($name:ident) => {
+    ($name:path) => {
         #[no_mangle]
         #[doc(hidden)]
         unsafe fn __rust_unico_allocate_stack(

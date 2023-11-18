@@ -15,6 +15,7 @@ use core::{
     task::{Context, Poll},
 };
 
+use bevy_utils_proc_macros::all_tuples;
 use unico_ful::{
     sym::{Co, PanicHook},
     Builder, NewError,
@@ -39,6 +40,19 @@ impl<M: Switch> Task<M> {
     /// Retrive the mutable reference of the metadata from the task.
     pub fn metadata_mut(&mut self) -> &mut M {
         &mut self.metadata
+    }
+
+    /// Yield the current running task to this task.
+    ///
+    /// `f` decides the destination of the current running task, such as a wait
+    /// queue or a scheduler's run queue.
+    pub fn resume(self, f: impl FnOnce(Self)) {
+        let other = self.co.resume_with(|co| {
+            let metadata = self.metadata.switch();
+            f(Task { co, metadata });
+            None
+        });
+        assert!(other.is_none(), "A task escaped from resuming!");
     }
 }
 
@@ -68,10 +82,19 @@ pub unsafe trait Switch: 'static {
     fn switch(self) -> Self;
 }
 
-// SAFETY: All current states of `()` is non-state.
-unsafe impl Switch for () {
-    fn switch(self) {}
+macro_rules! impl_tuples {
+    ($($param:ident),*) => {
+        unsafe impl<$($param: Switch),*> Switch for ($($param,)*) {
+            #[allow(clippy::unused_unit)]
+            #[allow(non_snake_case)]
+            fn switch(self) -> Self {
+                let ($($param,)*) = self;
+                ($($param.switch(),)*)
+            }
+        }
+    };
 }
+all_tuples!(impl_tuples, 0, 12, A);
 
 /// A scheduler operating on [`Task`]s.
 ///
@@ -86,39 +109,21 @@ pub trait Scheduler: Sized {
 
     /// Pop a task from a run queue of the scheduler for execution.
     fn dequeue(&self) -> Option<Task<Self::Metadata>>;
+}
 
-    /// Yield the current running task to another.
-    ///
-    /// `f` decides whether the current running task should be moved to a wait
-    /// queue for some event, or be requeued immediately (a.k.a. yielded).
-    fn yield_to<F>(&self, next: Task<Self::Metadata>, f: F)
-    where
-        F: FnOnce(Task<Self::Metadata>) -> Option<Task<Self::Metadata>>,
-    {
-        let other = next.co.resume_with(|co| {
-            let metadata = next.metadata.switch();
-            if let Some(next) = f(Task { co, metadata }) {
-                self.enqueue(next);
-            }
-            None
-        });
-        assert!(other.is_none(), "A task escaped from enqueueing!");
-    }
-
+/// The provided methods for [schedulers](Scheduler).
+pub trait SchedulerExt: Scheduler {
     /// Schedule the current running task for another chance for execution.
     ///
-    /// `f` decides whether the current running task should be moved to a wait
-    /// queue for some event, or be requeued immediately (a.k.a. yielded).
+    /// `f` decides the destination of the current running task, such as a wait
+    /// queue or a scheduler's run queue.
     ///
     /// This function is similar to [`try_schedule`](Scheduler::try_schedule),
     /// but spins when there's no other schedulable tasks.
-    fn schedule<F>(&self, f: F)
-    where
-        F: FnOnce(Task<Self::Metadata>) -> Option<Task<Self::Metadata>>,
-    {
+    fn schedule(&self, f: impl FnOnce(Task<Self::Metadata>)) {
         loop {
             if let Some(next) = self.dequeue() {
-                self.yield_to(next, f);
+                next.resume(f);
                 break;
             }
             hint::spin_loop()
@@ -128,17 +133,14 @@ pub trait Scheduler: Sized {
     /// Try to schedule the current running task for another chance for
     /// execution.
     ///
-    /// `f` decides whether the current running task should be moved to a wait
-    /// queue for some event, or be requeued immediately (a.k.a. yielded).
+    /// `f` decides the destination of the current running task, such as a wait
+    /// queue or a scheduler's run queue.
     ///
     /// Note that this function will not perform the context switch if there's
     /// no other schedulable tasks, which the boolean return value indicates.
-    fn try_schedule<F>(&self, f: F) -> bool
-    where
-        F: FnOnce(Task<Self::Metadata>) -> Option<Task<Self::Metadata>>,
-    {
+    fn try_schedule(&self, f: impl FnOnce(Task<Self::Metadata>)) -> bool {
         if let Some(next) = self.dequeue() {
-            self.yield_to(next, f);
+            next.resume(f);
             return true;
         }
         false
@@ -149,7 +151,7 @@ pub trait Scheduler: Sized {
     /// This method is a shorthand for
     /// [`try_schedule(Some)`](Scheduler::schedule).
     fn yield_now(&self) -> bool {
-        self.try_schedule(Some)
+        self.try_schedule(|task| self.enqueue(task))
     }
 
     /// Spawn a new [`Task`] controlled by this scheduler.
@@ -169,12 +171,13 @@ pub trait Scheduler: Sized {
             assert!(other.is_none(), "A task escaped from enqueueing!");
             let mut cx = SchedContext::new(self);
             f(&mut cx);
-            cx.schedule(|_| None);
+            cx.schedule(drop);
             unreachable!("Zombie task detected!")
         })?;
         Ok(Task { co, metadata })
     }
 }
+impl<T: Scheduler> SchedulerExt for T {}
 
 impl<T: Deref<Target = S>, S: Scheduler> Scheduler for T {
     type Metadata = S::Metadata;
@@ -219,7 +222,7 @@ mod tests {
     use unico_ful::Builder;
     use unico_stack::global_stack_allocator;
 
-    use super::{Scheduler, Task};
+    use super::{Scheduler, SchedulerExt, Task};
 
     global_resumer!(Boost);
     global_stack_allocator!(Global);
@@ -259,7 +262,7 @@ mod tests {
         });
         sched.enqueue(t2.unwrap());
         println!("Start");
-        sched.yield_to(t1.unwrap(), Some);
+        t1.unwrap().resume(|task| sched.enqueue(task));
         println!("5");
         assert!(sched.yield_now());
         println!("6\nEnd");
@@ -272,11 +275,11 @@ mod tests {
         let s2 = sched.clone();
         let s3 = sched.clone();
         let builder = Builder::new().hook_panic_with(move |_| {
-            s2.schedule(|_| None);
+            s2.schedule(drop);
             unreachable!()
         });
         let p = s3.spawn(builder, (), |_| panic!("What the fuck?"));
-        sched.yield_to(p.unwrap(), Some);
+        p.unwrap().resume(|task| sched.enqueue(task));
         assert!(!sched.yield_now());
     }
 }
