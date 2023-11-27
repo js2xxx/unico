@@ -74,10 +74,13 @@ impl<'a, T> Future for Asym<'a, T> {
     }
 }
 
-pub trait AsymWait: Future + Send + Sized {
+pub trait AsymWait: IntoFuture + Sized {
     /// Wait on a future "synchronously".
-    fn wait(self, cx: &mut AsymContext) -> Self::Output {
-        let mut future = core::pin::pin!(self);
+    fn wait(self, cx: &mut AsymContext) -> Self::Output
+    where
+        <Self as IntoFuture>::IntoFuture: Send,
+    {
+        let mut future = core::pin::pin!(self.into_future());
         loop {
             let mut ac = Context::from_waker(&cx.waker);
             match future.as_mut().poll(&mut ac) {

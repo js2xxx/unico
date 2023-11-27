@@ -8,7 +8,7 @@
 mod cx;
 
 use core::{
-    future::Future,
+    future::{Future, IntoFuture},
     hint,
     ops::Deref,
     pin::pin,
@@ -192,14 +192,15 @@ pub trait SchedulerExt: Scheduler {
 }
 impl<T: Scheduler> SchedulerExt for T {}
 
-pub trait SymWait: Future + Send + Sized {
+pub trait SymWait: IntoFuture + Sized {
     /// Wait on a future "synchronously".
     fn wait<S, R, M>(self, cx: &mut SchedContext<S>) -> Self::Output
     where
         S: Scheduler<Metadata = M> + Send + Sync + 'static,
         M: Switch + Send,
+        <Self as IntoFuture>::IntoFuture: Send,
     {
-        let mut future = pin!(self);
+        let mut future = pin!(self.into_future());
         loop {
             match future
                 .as_mut()

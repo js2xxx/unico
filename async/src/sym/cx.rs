@@ -29,7 +29,10 @@ unsafe impl<S: Scheduler + Send + Sync> Sync for Inner<S> {}
 
 impl<S: Scheduler> Inner<S> {}
 
-pub struct SchedContext<S: Scheduler>(Arc<Inner<S>>);
+pub struct SchedContext<S: Scheduler> {
+    inner: Arc<Inner<S>>,
+    marker: PhantomData<*mut ()>,
+}
 
 impl<S> fmt::Debug for SchedContext<S>
 where
@@ -38,8 +41,8 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SchedContext")
-            .field("sched", &self.0.sched)
-            .field("state", &self.0.state)
+            .field("sched", &self.inner.sched)
+            .field("state", &self.inner.state)
             .finish()
     }
 }
@@ -48,22 +51,25 @@ impl<S: Scheduler> SchedContext<S> {
     /// We don't make this function public to prevent users from calling `wait`
     /// in other tasks.
     pub(crate) fn new(sched: S) -> Self {
-        SchedContext(Arc::new(Inner {
-            sched,
-            state: Default::default(),
-        }))
+        SchedContext {
+            inner: Arc::new(Inner {
+                sched,
+                state: Default::default(),
+            }),
+            marker: PhantomData,
+        }
     }
 
     /// Park the current task for [`wake`](Waker::wake) to be called somewhere
     /// else.
     pub fn wait(&self) {
         loop {
-            let mut state = self.0.state.lock();
+            let mut state = self.inner.state.lock();
             match mem::take(&mut *state) {
                 State::Notified => break,
                 State::Empty => {
                     let f = move |task| *state = State::Waiting(task);
-                    self.0.sched.schedule(f)
+                    self.inner.sched.schedule(f)
                 }
                 State::Waiting(_) => unreachable!("cannot call `wait` on other tasks"),
             }
@@ -75,7 +81,7 @@ impl<S: Scheduler> Deref for SchedContext<S> {
     type Target = S;
 
     fn deref(&self) -> &Self::Target {
-        &self.0.sched
+        &self.inner.sched
     }
 }
 
@@ -88,7 +94,7 @@ impl<S: Scheduler + Send + Sync + 'static> SchedContext<S> {
     where
         <S as Scheduler>::Metadata: Send,
     {
-        (&self.0).into()
+        (&self.inner).into()
     }
 }
 
