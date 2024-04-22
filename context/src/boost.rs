@@ -8,7 +8,7 @@ const CONTEXT_LEN: usize = CONTEXT_SIZE / mem::size_of::<usize>();
 /// The `fcontext_t` wrapper type in [`Boost.Context`](https://github.com/boostorg/context/).
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct Fcx([usize; CONTEXT_LEN]);
+pub struct Fcx(#[allow(dead_code)] [usize; CONTEXT_LEN]);
 
 #[link(name = "boost_context")]
 extern "C" {

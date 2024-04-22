@@ -289,12 +289,18 @@ mod tests {
 
     #[test]
     fn panicked() {
+        std::println!("0");
         callcc(|co| {
-            super::Co::builder()
-                .hook_panic_with(move |_| co)
-                .spawn(|_| panic!("What the fuck?"))
-                .unwrap()
+            let ret = super::Co::builder()
+                .hook_panic_with(move |_| {
+                    std::println!("3");
+                    co
+                })
+                .spawn(|_| panic!("2"));
+            std::println!("1");
+            ret.unwrap()
         });
+        std::println!("4");
         assert_eq!(CUR.get(), ptr::null_mut());
     }
 
@@ -335,13 +341,20 @@ mod tests {
     fn symmetric() {
         let b = spawn(|a| {
             let c = spawn(move |b| {
+                std::println!("3");
                 let ret = b.unwrap().resume();
+                std::println!("5");
                 assert!(ret.is_none());
                 a.unwrap()
             });
-            c.resume().unwrap()
+            std::println!("2");
+            let ret = c.resume().unwrap();
+            std::println!("4");
+            ret
         });
+        std::println!("1");
         let ret = b.resume();
+        std::println!("6");
         assert!(ret.is_none());
         assert_eq!(CUR.get(), ptr::null_mut());
     }
