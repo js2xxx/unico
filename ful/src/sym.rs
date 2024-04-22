@@ -126,12 +126,9 @@ impl Co {
     ///   the function will be called (consumed) before the transfer completes,
     ///   and thus unable to escape its own lifetime.
     pub fn resume_with<M: FnOnce(Self) -> Option<Self>>(self, map: M) -> Option<Self> {
-        let map = move |co| {
-            let co = map(co);
-            (co, ptr::null_mut())
-        };
+        let map = move |co| (map(co), ptr::null_mut());
         // SAFETY: The payload pointers are unspecified and unused.
-        unsafe { self.resume_with_payloaded(map).0 }
+        unsafe { self.resume_payloaded_with(map).0 }
     }
 
     /// Similar to [`Co::resume`], but with a pointer payload.
@@ -196,7 +193,7 @@ impl Co {
     /// The validity of returned pointer is not guaranteed whether `payload` is
     /// valid. The caller must maintains this manually, usually by calling this
     /// function in pairs.
-    pub unsafe fn resume_with_payloaded<M: FnOnce(Self) -> (Option<Self>, *mut ())>(
+    pub unsafe fn resume_payloaded_with<M: FnOnce(Self) -> (Option<Self>, *mut ())>(
         self,
         map: M,
     ) -> (Option<Self>, *mut ()) {

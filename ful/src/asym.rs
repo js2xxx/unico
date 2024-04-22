@@ -29,7 +29,7 @@ enum Payload<Y> {
     Panicked(Box<dyn Any + Send>),
 }
 
-/// A generator, a.k.a. an symmetric coroutine.
+/// A generator, a.k.a. an asymmetric coroutine.
 // Safety notice for the internal resuming order (N for `ptr::null_mut`):
 //
 //          caller                    generator
