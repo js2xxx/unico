@@ -75,7 +75,7 @@ pub(crate) struct TransferData {
 
 impl TransferData {
     pub fn as_mut(&mut self) -> *mut () {
-        (self as *mut TransferData).cast()
+        ptr::from_mut(self).cast()
     }
 
     /// # Safety
@@ -97,7 +97,8 @@ impl TransferData {
                 payload: ptr::null_mut(),
             }
         } else {
-            *Self::from_mut(data)
+            // SAFETY: `data` is not null.
+            *unsafe { Self::from_mut(data) }
         }
     }
 }

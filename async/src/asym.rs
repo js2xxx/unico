@@ -32,7 +32,7 @@ pub struct AsymContext<'y> {
 
 impl<'a, F, T, S, P> Build<F, S, P> for Asym<'a, T>
 where
-    F: FnOnce(AsymContext) -> T + Send + 'a,
+    F: FnOnce(AsymContext<'_>) -> T + Send + 'a,
     S: Into<Stack>,
     P: PanicHook,
 {
@@ -44,7 +44,7 @@ where
 
 impl<'a, F, T, S, P> BuildUnchecked<F, S, P> for Asym<'a, T>
 where
-    F: FnOnce(AsymContext) -> T,
+    F: FnOnce(AsymContext<'_>) -> T,
     S: Into<Stack>,
     P: PanicHook,
 {
@@ -57,9 +57,10 @@ where
         builder: Builder<S, P>,
         arg: F,
     ) -> Result<Self, Self::Error> {
-        Ok(Asym(Gn::build_unchecked(builder, |y, waker| -> T {
-            arg(AsymContext { y, waker })
-        })?))
+        // SAFETY: The contract is the same.
+        Ok(Asym(unsafe {
+            Gn::build_unchecked(builder, |y, waker| arg(AsymContext { y, waker }))?
+        }))
     }
 }
 
@@ -76,7 +77,7 @@ impl<'a, T> Future for Asym<'a, T> {
 
 pub trait AsymWait: IntoFuture + Sized {
     /// Wait on a future "synchronously".
-    fn wait(self, cx: &mut AsymContext) -> Self::Output
+    fn wait(self, cx: &mut AsymContext<'_>) -> Self::Output
     where
         <Self as IntoFuture>::IntoFuture: Send,
     {
@@ -96,16 +97,16 @@ impl<F: Future + Send + Sized> AsymWait for F {}
 /// Turns a block of sync code into a future.
 pub fn sync<'a, T, F>(func: F) -> AsymBuilder<'a, T, F>
 where
-    F: FnOnce(AsymContext) -> T + Send + 'a,
+    F: FnOnce(AsymContext<'_>) -> T + Send + 'a,
 {
     AsymBuilder(func, PhantomData)
 }
 
 pub struct AsymBuilder<'a, T, F>(F, PhantomData<&'a ()>)
 where
-    F: FnOnce(AsymContext) -> T + Send + 'a;
+    F: FnOnce(AsymContext<'_>) -> T + Send + 'a;
 
-impl<'a, T, F: FnOnce(AsymContext) -> T + Send> IntoFuture for AsymBuilder<'a, T, F> {
+impl<'a, T, F: FnOnce(AsymContext<'_>) -> T + Send> IntoFuture for AsymBuilder<'a, T, F> {
     type Output = T;
 
     type IntoFuture = Asym<'a, T>;

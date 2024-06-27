@@ -90,7 +90,7 @@ impl<S: Scheduler + Send + Sync + 'static> SchedContext<S> {
     ///
     /// The standard library implements [`Into<Waker>`] for this structure, so
     /// use this method instead of possible redundant clones.
-    pub fn as_waker(&self) -> WakerRef
+    pub fn as_waker(&self) -> WakerRef<'_>
     where
         <S as Scheduler>::Metadata: Send,
     {

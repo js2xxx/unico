@@ -135,7 +135,7 @@ where
             let y = match catch_unwind(AssertUnwindSafe(|| func(&mut handle, initial))) {
                 Ok(complete) => {
                     c = complete;
-                    Payload::<Y>::Complete((&c as *const C).cast())
+                    Payload::<Y>::Complete(ptr::from_ref(&c).cast())
                 }
                 Err(payload) => {
                     let payload = handle.inner.as_ref().unwrap().resume_unwind(payload);
@@ -168,11 +168,11 @@ where
 
 impl<'a, C, Y, R> Gn<'a, C, Y, R> {
     pub fn resume(&mut self, resumed: R) -> CoroutineState<Y, C> {
-        let mut m = MaybeUninit::new(resumed);
         let co = self
             .inner
             .take()
             .expect("coroutine resumed after completion");
+        let mut m = MaybeUninit::new(resumed);
 
         // SAFETY: See step 2 and 4 of the type's safety notice.
         let (res, payload) = unsafe { co.resume_payloaded(m.as_mut_ptr().cast()) };
@@ -207,9 +207,9 @@ impl<C, Y, R> Coroutine<R> for Gn<'_, C, Y, R> {
 
 impl<Y, R> YieldHandle<Y, R> {
     pub fn yield_(&mut self, yielded: Y) -> R {
-        let mut y = MaybeUninit::new(Payload::Yielded(yielded));
-
         let co = self.inner.take().unwrap();
+
+        let mut y = MaybeUninit::new(Payload::Yielded(yielded));
         // SAFETY: See step 3 of the type's safety notice.
         let (res, payload) = unsafe { co.resume_payloaded(y.as_mut_ptr().cast()) };
         self.inner = res;

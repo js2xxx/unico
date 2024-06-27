@@ -92,7 +92,8 @@ impl<S, P> Builder<S, P> {
     where
         T: BuildUnchecked<F, S, P>,
     {
-        T::build_unchecked(self, arg)
+        // SAFETY: The contract is the same.
+        unsafe { T::build_unchecked(self, arg) }
     }
 }
 
@@ -121,7 +122,8 @@ impl<S: Into<Stack>, P: PanicHook> Builder<S, P> {
     where
         F: FnOnce(Option<Co>) -> Co,
     {
-        self.build_unchecked(func)
+        // SAFETY: The contract is the same.
+        unsafe { self.build_unchecked(func) }
     }
 
     /// Call the target function with current continuation.
@@ -148,7 +150,8 @@ impl<S: Into<Stack>, P: PanicHook> Builder<S, P> {
     where
         F: FnOnce(Co) -> Co,
     {
-        self.spawn_unchecked(|co| func(co.unwrap())).map(Co::resume)
+        // SAFETY: The contract is the same.
+        unsafe { self.spawn_unchecked(|co| func(co.unwrap())) }.map(Co::resume)
     }
 
     /// Create a stackful generator, a.k.a. an asymmetric coroutine.
@@ -184,7 +187,8 @@ pub unsafe fn spawn_unchecked<F>(func: F) -> Co
 where
     F: FnOnce(Option<Co>) -> Co,
 {
-    spawn_unchecked_on(&Global, func)
+    // SAFETY: The contract is the same.
+    unsafe { spawn_unchecked_on(&Global, func) }
 }
 
 /// Create a symmetric stackful coroutine on a specific stack.
@@ -214,9 +218,9 @@ where
     S: Into<Stack>,
     F: FnOnce(Option<Co>) -> Co,
 {
-    Builder::new()
-        .on(stack)
-        .spawn_unchecked(func)
+    let builder = Builder::new().on(stack);
+    // SAFETY: The contract is the same.
+    unsafe { builder.spawn_unchecked(func) }
         .expect("failed to create a symmetric coroutine")
 }
 
@@ -243,7 +247,8 @@ pub unsafe fn callcc_unchecked<F>(func: F) -> Option<Co>
 where
     F: FnOnce(Co) -> Co,
 {
-    spawn_unchecked(|co| func(co.unwrap())).resume()
+    // SAFETY: The contract is the same.
+    unsafe { spawn_unchecked(|co| func(co.unwrap())) }.resume()
 }
 
 /// Create a stackful generator, a.k.a. an asymmetric coroutine.

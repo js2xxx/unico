@@ -1,4 +1,9 @@
 #![no_std]
+#![deny(future_incompatible)]
+#![deny(rust_2018_idioms)]
+#![deny(rust_2024_compatibility)]
+#![deny(trivial_casts)]
+#![deny(trivial_numeric_casts)]
 #![cfg_attr(feature = "ucx", feature(new_uninit))]
 #![allow(internal_features)]
 #![feature(allocator_api)]
@@ -149,7 +154,7 @@ pub unsafe fn new_on(
     stack: NonNull<[u8]>,
     entry: Entry<()>,
 ) -> Result<NonNull<()>, AllocError> {
-    __rust_unico_context_new(stack.as_non_null_ptr(), stack.len(), entry)
+    unsafe { __rust_unico_context_new(stack.as_non_null_ptr(), stack.len(), entry) }
 }
 
 /// Yields the execution to the target context 'cx' with `data` passed to
@@ -160,7 +165,7 @@ pub unsafe fn new_on(
 /// `cx` must be created from [`new_on`] and be bound to some valid stack, and
 /// `data` must be valid according to `entry` passed to [`new_on`].
 pub unsafe fn resume(cx: NonNull<()>, data: *mut ()) -> Transfer<()> {
-    __rust_unico_context_resume(cx, data)
+    unsafe { __rust_unico_context_resume(cx, data) }
 }
 
 /// Yields the execution to the target context 'cx' with `data` passed to
@@ -173,7 +178,7 @@ pub unsafe fn resume(cx: NonNull<()>, data: *mut ()) -> Transfer<()> {
 /// [`new_on`] wrapped in an option, and `data` must be valid according to
 /// `entry` passed to [`new_on`].
 pub unsafe fn resume_with(cx: NonNull<()>, data: *mut (), map: Map<()>) -> Transfer<()> {
-    __rust_unico_context_resume_with(cx, data, map)
+    unsafe { __rust_unico_context_resume_with(cx, data, map) }
 }
 
 /// Define a global resumer so that those global functions (like [`resume`]) can
