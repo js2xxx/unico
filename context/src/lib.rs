@@ -48,7 +48,7 @@ pub struct Transfer<C> {
 
 pub type Entry<C> = unsafe extern "C" fn(cx: NonNull<C>, data: *mut ()) -> !;
 #[allow(improper_ctypes_definitions)]
-pub type Map<C> = unsafe extern "C" fn(cx: NonNull<C>, data: *mut ()) -> Transfer<C>;
+pub type Map<C> = unsafe extern "C-unwind" fn(cx: NonNull<C>, data: *mut ()) -> Transfer<C>;
 
 /// The generic symmetric context-switching trait.
 ///

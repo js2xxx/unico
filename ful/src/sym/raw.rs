@@ -233,7 +233,7 @@ where
     ///
     /// `ptr` must points to a valid `RawCo` calculated from `RawCo::from_ptr`.
     #[allow(improper_ctypes_definitions)]
-    unsafe extern "C" fn exit(_: NonNull<()>, ptr: *mut ()) -> Transfer<()> {
+    unsafe extern "C-unwind" fn exit(_: NonNull<()>, ptr: *mut ()) -> Transfer<()> {
         let task = Self::from_ptr(ptr);
         // SAFETY: The task is valid by contract.
         unsafe {
@@ -252,7 +252,7 @@ where
 ///
 /// `ptr` must offer a valid `M` in `TransferData`.
 #[allow(improper_ctypes_definitions)]
-pub(super) unsafe extern "C" fn map<M: FnOnce(Co) -> (Option<Co>, *mut ())>(
+pub(super) unsafe extern "C-unwind" fn map<M: FnOnce(Co) -> (Option<Co>, *mut ())>(
     cx: NonNull<()>,
     ptr: *mut (),
 ) -> Transfer<()> {
