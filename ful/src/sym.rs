@@ -25,9 +25,9 @@ use crate::{Build, BuildUnchecked, Builder, NewError};
 /// # Notes
 ///
 /// - If neither `unwind` nor `std` feature is enabled and the coroutine is
-///   dropped while not resumed to end, all the data on the call stack will be
-///   ***LEAKED***. It's because the dropping process requires unwinding, and
-///   thus a `Box<dyn Any + Send>`.
+///   dropped while not resumed to end, all the data on the call stack alongside
+///   with the whole stack allocation will be ***LEAKED***. It's because the
+///   dropping process requires unwinding, and thus a `Box<dyn Any + Send>`.
 ///
 /// - If this object represents the root (system) call stack instead of being
 ///   created by builders outside any scope of [`enter_root`], dropping the
@@ -216,10 +216,6 @@ impl Drop for Co {
             let cx = self.cx;
             #[cfg(any(feature = "unwind", feature = "std"))]
             cx::resume_with(cx, ptr::null_mut(), raw::unwind);
-            #[cfg(not(any(feature = "unwind", feature = "std")))]
-            unsafe {
-                ptr::drop_in_place(raw)
-            };
         }
     }
 }
