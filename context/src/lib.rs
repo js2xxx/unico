@@ -48,7 +48,8 @@ pub struct Transfer<C> {
 
 pub type Entry<C> = unsafe extern "C" fn(cx: NonNull<C>, data: *mut ()) -> !;
 #[allow(improper_ctypes_definitions)]
-pub type Map<C> = unsafe extern "C-unwind" fn(cx: NonNull<C>, data: *mut ()) -> Transfer<C>;
+pub type Map<C> =
+    unsafe extern "C-unwind" fn(cx: NonNull<C>, data: *mut ()) -> Transfer<C>;
 
 /// The generic symmetric context-switching trait.
 ///
@@ -115,12 +116,12 @@ fn layout_union(l1: Layout, l2: Layout) -> Layout {
 
 fn stack_top<T>(stack: NonNull<[u8]>) -> Option<NonNull<T>> {
     let layout = Layout::new::<T>();
-
-    let ptr = stack.as_non_null_ptr();
-    let addr = ptr.addr().get();
     if stack.len() < layout_union(layout, page::STACK_LAYOUT).size() {
         return None;
     }
+
+    let ptr = stack.as_non_null_ptr();
+    let addr = ptr.addr().get();
     let ret = (addr + stack.len() - layout.size()) & !(layout.align() - 1);
     if ret < addr {
         return None;

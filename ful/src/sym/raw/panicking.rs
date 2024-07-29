@@ -6,7 +6,6 @@ use core::ptr::NonNull;
 
 #[cfg(any(feature = "unwind", feature = "std"))]
 use unico_context::Transfer;
-use unico_stack::Stack;
 
 #[cfg(any(feature = "unwind", feature = "std"))]
 use crate::{sym::Co, unwind};
@@ -14,7 +13,6 @@ use crate::{sym::Co, unwind};
 #[cfg(any(feature = "unwind", feature = "std"))]
 pub(in crate::sym) struct HandleDrop {
     pub cx: NonNull<()>,
-    pub raw: *mut Stack,
 }
 
 // SAFETY: If the actual context is not `Send`, then the coroutine will also not
@@ -25,18 +23,15 @@ unsafe impl Send for HandleDrop {}
 
 #[cfg(any(feature = "unwind", feature = "std"))]
 #[allow(improper_ctypes_definitions)]
-pub(in crate::sym) extern "C-unwind" fn unwind(cx: NonNull<()>, raw: *mut ()) -> Transfer<()> {
-    unwind::resume_unwind(Box::new(HandleDrop {
-        cx,
-        raw: raw.cast(),
-    }))
+pub(in crate::sym) extern "C-unwind" fn unwind(
+    cx: NonNull<()>,
+    _: *mut (),
+) -> Transfer<()> {
+    unwind::resume_unwind(Box::new(HandleDrop { cx }))
 }
 
 #[cfg(any(feature = "unwind", feature = "std"))]
-pub(in crate::sym) fn resume_unwind(
-    _: &Co,
-    payload: Box<dyn Any + Send>,
-) -> Box<dyn Any + Send> {
+pub(in crate::sym) fn resume_unwind(payload: Box<dyn Any + Send>) -> Box<dyn Any + Send> {
     match payload.downcast::<HandleDrop>() {
         Ok(data) => unwind::resume_unwind(data),
         Err(p) => p,

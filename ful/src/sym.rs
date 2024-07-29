@@ -6,7 +6,6 @@ use alloc::boxed::Box;
 #[cfg(any(feature = "unwind", feature = "std"))]
 use core::any::Any;
 use core::{
-    cell::Cell,
     mem::{self, ManuallyDrop},
     ptr::{self, NonNull},
 };
@@ -15,26 +14,28 @@ use unico_context as cx;
 use unico_context::Transfer;
 use unico_stack::{Global, Stack};
 
-use self::raw::TransferData;
-pub use self::raw::{AbortHook, PanicHook};
+pub use self::raw::{enter_root, AbortHook, PanicHook};
 use crate::{Build, BuildUnchecked, Builder, NewError};
-
-#[thread_local]
-static CUR: Cell<*mut ()> = Cell::new(ptr::null_mut());
 
 /// A continuation of the current control flow.
 ///
 /// This structure represents a continuation, a.k.a. the handle of a symmetric
 /// coroutine.
 ///
-/// Note that if neither `unwind` nor `std` feature is enabled and the coroutine
-/// is dropped while not resumed to end, all the data on the call stack will be
-/// ***LEAKED***. It's because the dropping process requires unwinding, and thus
-/// a `Box<dyn Any + Send>`.
+/// # Notes
+///
+/// - If neither `unwind` nor `std` feature is enabled and the coroutine is
+///   dropped while not resumed to end, all the data on the call stack will be
+///   ***LEAKED***. It's because the dropping process requires unwinding, and
+///   thus a `Box<dyn Any + Send>`.
+///
+/// - If this object represents the root (system) call stack instead of being
+///   created by builders outside any scope of [`enter_root`], dropping the
+///   object will result in a panic or blocking the whole control flow.
 #[derive(Debug)]
+#[repr(transparent)]
 pub struct Co {
     cx: NonNull<()>,
-    raw: *mut Stack,
 }
 
 // SAFETY: The bounds of the actual function will be checked in the builder.
@@ -42,15 +43,14 @@ unsafe impl Send for Co {}
 unsafe impl Sync for Co {}
 
 impl Co {
-    fn from_inner(cx: NonNull<()>, raw: *mut Stack) -> Self {
-        Co { cx, raw }
+    unsafe fn from_inner(cx: NonNull<()>) -> Self {
+        Co { cx }
     }
 
-    fn into_inner(this: Self) -> (NonNull<()>, *mut Stack) {
+    fn into_inner(this: Self) -> NonNull<()> {
         let cx = this.cx;
-        let raw = this.raw;
         mem::forget(this);
-        (cx, raw)
+        cx
     }
 }
 
@@ -98,7 +98,7 @@ where
 }
 
 impl Co {
-    /// Move the current control flow to this continuation.
+    /// Transfers the current control flow to this continuation.
     ///
     /// This method moves the current control flow to this continuation,
     /// alongside with this object's ownership. Note that the return value may
@@ -126,7 +126,7 @@ impl Co {
     ///   (`self`) of the current control flow transfer are valid at the time,
     ///   the function will be called (consumed) before the transfer completes,
     ///   and thus unable to escape its own lifetime.
-    pub fn resume_with<M: FnOnce(Self) -> Option<Self>>(self, map: M) -> Option<Self> {
+    pub fn resume_with(self, map: impl FnOnce(Self) -> Option<Self>) -> Option<Self> {
         let map = move |co| (map(co), ptr::null_mut());
         // SAFETY: The payload pointers are unspecified and unused.
         unsafe { self.resume_payloaded_with(map).0 }
@@ -140,11 +140,7 @@ impl Co {
     /// valid. The caller must maintains this manually, usually by calling this
     /// function in pairs.
     pub unsafe fn resume_payloaded(self, payload: *mut ()) -> (Option<Self>, *mut ()) {
-        let (cx, raw) = Co::into_inner(self);
-        let mut data = TransferData {
-            raw: CUR.replace(raw.cast()).cast(),
-            payload,
-        };
+        let cx = Co::into_inner(self);
         // SAFETY: `cx`'s lifetime is bound to its own coroutine, and it is ALWAYS
         // THE UNIQUE REFERENCE to the runtime stack. The proof is divided into 2
         // points:
@@ -178,12 +174,10 @@ impl Co {
         //
         //    Thus, though the naming of variables will be a bit rough, the statement
         // actually proves to be true.
-        let Transfer { context, data } = unsafe { cx::resume(cx, data.as_mut()) };
-        // SAFETY: The pointer is always valid according to all the calling of
-        // `cx::resume`, `cx::resume_with` except the initial and final ones.
-        let data = unsafe { TransferData::read(data) };
+        let Transfer { context, data } = unsafe { cx::resume(cx, payload) };
 
-        (context.map(|cx| Co::from_inner(cx, data.raw)), data.payload)
+        // SAFETY: `cx` is valid by contract.
+        (context.map(|cx| unsafe { Co::from_inner(cx) }), data)
     }
 
     /// Similar to [`Co::resume_with`], but with a possibly-returned pointer
@@ -198,25 +192,17 @@ impl Co {
         self,
         map: M,
     ) -> (Option<Self>, *mut ()) {
-        let (cx, raw) = Co::into_inner(self);
+        let cx = Co::into_inner(self);
 
         let mut data = ManuallyDrop::new(map);
         let ptr = ptr::from_mut(&mut data).cast();
 
-        let mut data = TransferData {
-            raw: CUR.replace(raw.cast()).cast(),
-            payload: ptr,
-        };
-
         // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
         let Transfer { context, data } =
-            unsafe { cx::resume_with(cx, data.as_mut(), raw::map::<M>) };
-        // SAFETY: The pointer is always valid according to all the calling of
-        // `cx::resume`, `cx::resume_with` except the initial and final ones. See
-        // `raw::map` for more information.
-        let data = unsafe { TransferData::read(data) };
+            unsafe { cx::resume_with(cx, ptr, raw::map::<M>) };
 
-        (context.map(|cx| Co::from_inner(cx, data.raw)), data.payload)
+        // SAFETY: `cx` is valid by contract.
+        (context.map(|cx| unsafe { Co::from_inner(cx) }), data)
     }
 
     /// Resume the unwinding for this coroutine's partial destruction process.
@@ -232,7 +218,7 @@ impl Co {
     /// continuing the process.
     #[cfg(any(feature = "unwind", feature = "std"))]
     pub fn resume_unwind(&self, payload: Box<dyn Any + Send>) -> Box<dyn Any + Send> {
-        raw::resume_unwind(self, payload)
+        raw::resume_unwind(payload)
     }
 }
 
@@ -244,31 +230,27 @@ impl Drop for Co {
         // one in `Co::resume_payloaded`.
         unsafe {
             let cx = self.cx;
-            let raw = self.raw;
-            if !raw.is_null() {
-                #[cfg(any(feature = "unwind", feature = "std"))]
-                {
-                    let old = CUR.replace(raw.cast());
-                    cx::resume_with(cx, old, raw::unwind);
-                }
-                #[cfg(not(any(feature = "unwind", feature = "std")))]
-                unsafe {
-                    ptr::drop_in_place(raw)
-                };
+            #[cfg(any(feature = "unwind", feature = "std"))]
+            {
+                cx::resume_with(cx, ptr::null_mut(), raw::unwind);
             }
+            #[cfg(not(any(feature = "unwind", feature = "std")))]
+            unsafe {
+                ptr::drop_in_place(raw)
+            };
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use core::{convert::identity, ptr};
+    use core::convert::identity;
     use std::{alloc::Global, string::String};
 
     use unico_context::{boost::Boost, global_resumer};
     use unico_stack::global_stack_allocator;
 
-    use crate::{callcc, spawn, spawn_unchecked, sym::CUR};
+    use crate::{callcc, spawn, spawn_unchecked};
 
     global_stack_allocator!(Global);
     global_resumer!(Boost);
@@ -276,13 +258,11 @@ mod tests {
     #[test]
     fn creation() {
         spawn(Option::unwrap);
-        assert_eq!(CUR.get(), ptr::null_mut());
     }
 
     #[test]
     fn empty() {
         assert!(callcc(identity).is_none());
-        assert_eq!(CUR.get(), ptr::null_mut());
     }
 
     #[test]
@@ -299,7 +279,6 @@ mod tests {
             ret.unwrap()
         });
         std::println!("4");
-        assert_eq!(CUR.get(), ptr::null_mut());
     }
 
     #[test]
@@ -310,7 +289,6 @@ mod tests {
             co
         });
         assert!(ret.is_none());
-        assert_eq!(CUR.get(), ptr::null_mut());
     }
 
     #[test]
@@ -332,7 +310,6 @@ mod tests {
             }
         }
         assert_eq!(counter, 10);
-        assert_eq!(CUR.get(), ptr::null_mut());
     }
 
     #[test]
@@ -354,12 +331,10 @@ mod tests {
         let ret = b.resume();
         std::println!("6");
         assert!(ret.is_none());
-        assert_eq!(CUR.get(), ptr::null_mut());
     }
 
     #[test]
     fn symmetric_direct() {
         assert!(callcc(|a| spawn(move |_| a)).is_none());
-        assert_eq!(CUR.get(), ptr::null_mut());
     }
 }

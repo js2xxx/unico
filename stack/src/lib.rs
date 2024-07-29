@@ -1,4 +1,9 @@
 #![no_std]
+#![deny(future_incompatible)]
+#![deny(rust_2018_idioms)]
+#![deny(rust_2024_compatibility)]
+#![deny(trivial_casts)]
+#![deny(trivial_numeric_casts)]
 #![allow(internal_features)]
 #![feature(allocator_api)]
 #![feature(allow_internal_unstable)]
@@ -155,11 +160,11 @@ unsafe impl<T: Allocator + Clone> StackAllocator for T {
         where
             F: FnOnce(NonNull<u8>, Layout),
         {
-            // SAFETY: The memory is just allocated with a valid size, and the pointer is
-            // well-aligned.
-            dropper_in::<F>(memory, layouts.returned).write(drop);
+            // SAFETY: The memory is just allocated with a valid size, and the pointer
+            // is well-aligned.
+            unsafe { dropper_in::<F>(memory, layouts.returned).write(drop) };
             // SAFETY: `memory` is allocated by us and will be dropped by `dropper`.
-            Stack::new(memory, layouts.returned, execute_dropper::<F>)
+            unsafe { Stack::new(memory, layouts.returned, execute_dropper::<F>) }
         }
 
         unsafe fn execute_dropper<F>(memory: NonNull<u8>, returned: Layout)
