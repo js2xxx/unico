@@ -5,6 +5,7 @@ use core::panic::AssertUnwindSafe;
 use core::{
     alloc::Layout,
     any::type_name,
+    panic::UnwindSafe,
     ptr::{self, NonNull},
 };
 
@@ -67,42 +68,6 @@ impl<F, P: PanicHook> RawCo<F, P> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct TransferData {
-    pub raw: *mut Stack,
-    pub payload: *mut (),
-}
-
-impl TransferData {
-    pub fn as_mut(&mut self) -> *mut () {
-        ptr::from_mut(self).cast()
-    }
-
-    /// # Safety
-    ///
-    /// `data` must point to a valid `TransferData` and guarantee a unique
-    /// reference.
-    pub unsafe fn from_mut<'a>(data: *mut ()) -> &'a mut Self {
-        unsafe { &mut *data.cast::<Self>() }
-    }
-
-    /// # Safety
-    ///
-    /// `data` must point to a valid `TransferData` and guarantee a unique
-    /// reference or be null.
-    pub unsafe fn read(data: *mut ()) -> Self {
-        if data.is_null() {
-            TransferData {
-                raw: ptr::null_mut(),
-                payload: ptr::null_mut(),
-            }
-        } else {
-            // SAFETY: `data` is not null.
-            *unsafe { Self::from_mut(data) }
-        }
-    }
-}
-
 impl<F, P> RawCo<F, P>
 where
     F: FnOnce(Option<Co>) -> Co,
@@ -160,7 +125,8 @@ where
 
         // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
         let resume = unsafe { cx::resume(context, pointer) };
-        Ok(Co::from_inner(resume.context.unwrap(), raw.stack))
+        // SAFETY: `context` is valid by contract.
+        Ok(unsafe { Co::from_inner(resume.context.unwrap()) })
     }
 }
 
@@ -185,14 +151,13 @@ where
 
         let run = || {
             // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
-            let Transfer { context, data } = unsafe { cx::resume(cx, ptr) };
-            // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
-            let raw = unsafe { TransferData::read(data) }.raw;
-            func(context.map(|cx| Co::from_inner(cx, raw)))
+            let Transfer { context, .. } = unsafe { cx::resume(cx, ptr) };
+            // SAFETY: `cx` is valid by contract.
+            func(context.map(|cx| unsafe { Co::from_inner(cx) }))
         };
 
         #[cfg(any(feature = "unwind", feature = "std"))]
-        let (context, next) = {
+        let context = {
             // Move the hook in the braces to make sure it drops when the control flow
             // goes out of the scope.
             let rewind = |payload| AssertUnwindSafe(|| hook.rewind(payload));
@@ -202,7 +167,7 @@ where
                 let payload = match unwind::catch_unwind(AssertUnwindSafe(run)) {
                     Ok(co) => return Co::into_inner(co),
                     Err(payload) => match payload.downcast::<HandleDrop>() {
-                        Ok(hd) => return (hd.cx, hd.raw),
+                        Ok(hd) => return hd.cx,
                         Err(payload) => payload,
                     },
                 };
@@ -212,7 +177,7 @@ where
                 match unwind::catch_unwind(rewind(payload)) {
                     Ok(co) => Co::into_inner(co),
                     Err(payload) => match payload.downcast::<HandleDrop>() {
-                        Ok(hd) => (hd.cx, hd.raw),
+                        Ok(hd) => hd.cx,
                         Err(payload) => Co::into_inner(AbortHook.rewind(payload)),
                     },
                 }
@@ -222,8 +187,6 @@ where
         #[cfg(not(any(feature = "unwind", feature = "std")))]
         let (context, next) = Co::into_inner(run());
 
-        let old = super::CUR.replace(next.cast());
-        debug_assert_eq!(old, ptr);
         // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
         unsafe { cx::resume_with(context, ptr, Self::exit) };
         unreachable!("Exiting failed. There's at least some dangling `Co` instance!")
@@ -254,22 +217,83 @@ where
 #[allow(improper_ctypes_definitions)]
 pub(super) unsafe extern "C-unwind" fn map<M: FnOnce(Co) -> (Option<Co>, *mut ())>(
     cx: NonNull<()>,
-    ptr: *mut (),
+    payload: *mut (),
 ) -> Transfer<()> {
-    // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
-    let data = unsafe { TransferData::from_mut(ptr) };
     // SAFETY: The only reading is safe by contract.
-    let func = unsafe { data.payload.cast::<M>().read() };
-    let (ret, payload) = func(Co::from_inner(cx, data.raw));
+    let func = unsafe { payload.cast::<M>().read() };
+    // SAFETY: `cx` is valid by contract.
+    let (ret, payload) = func(unsafe { Co::from_inner(cx) });
     Transfer {
-        context: ret.map(|co| {
-            let (cx, raw) = Co::into_inner(co);
-            data.raw = raw;
-            data.payload = payload;
-            cx
-        }),
-        // We return the pointer to the same `TransferData`, thus guaranteeing its
-        // validity.
-        data: ptr,
+        context: ret.map(Co::into_inner),
+        data: payload,
     }
+}
+
+/// Enters a scope in the root control flow so that it can be dropped via its
+/// corresponding [`Co`] object without panic.
+///
+/// Users may want to switch to other `Co` instances without returning back to
+/// the root control flow, i.e. the callee of the `main` function. In such cases
+/// without this function, dropping the root object will unwind its whole stack
+/// without runtime support, which ends up in aborting the whole thread:
+///
+/// ```rust,should_panic
+/// # #![feature(allocator_api)]
+/// # unico_stack::global_stack_allocator!(std::alloc::Global);
+/// # unico_context::global_resumer!(unico_context::boost::Boost);
+///
+/// unico_ful::callcc(|co| {
+///     // This statement will abort the whole thread,
+///     // which is not what we want.
+///     drop(co);
+///
+///     // The infinite loop will be unreachable.
+///     loop { println!("Spinning forever") }
+/// });
+/// ```
+///
+/// With this function, on the contrary, such ending won't happen, and all the
+/// variables in this function will be safely dropped before the control flow
+/// is transferred smoothly back to the caller of `drop`.
+///
+/// ```rust
+/// # #![feature(allocator_api)]
+/// # unico_stack::global_stack_allocator!(std::alloc::Global);
+/// # unico_context::global_resumer!(unico_context::boost::Boost);
+///
+/// unsafe { unico_ful::sym::enter_root(|| {
+///     unico_ful::callcc(|co| {
+///         drop(co);
+///         println!("Successful!");
+///         std::process::exit(0);
+///     });
+/// }); }
+/// ```
+///
+/// When unwinding is disabled, this function merely calls `f` and has no other
+/// side effects.
+///
+/// # Safety
+///
+/// This function itself won't cause any undefined behavior when calling
+/// multiple times. However, due to its special role in the whole play
+/// (creating a scope and separating `Co` contexts), it can cause unexpected
+/// behaviors easily. So it should only be called once in the root control
+/// flow.
+pub unsafe fn enter_root<R>(f: impl FnOnce() -> R + UnwindSafe) -> R {
+    #[cfg(any(feature = "unwind", feature = "std"))]
+    return match unwind::catch_unwind(f) {
+        Ok(ret) => ret,
+        Err(payload) => match payload.downcast::<HandleDrop>() {
+            Ok(data) => {
+                // SAFETY: The `cx` is valid while the root control flow should be aborted
+                // immediately.
+                unsafe { cx::resume(data.cx, ptr::null_mut()) };
+                unreachable!("Failed to drop the root `Co`")
+            }
+            Err(payload) => unwind::resume_unwind(payload),
+        },
+    };
+    #[cfg(not(any(feature = "unwind", feature = "std")))]
+    f()
 }

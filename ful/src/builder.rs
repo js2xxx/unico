@@ -157,7 +157,7 @@ impl<S: Into<Stack>, P: PanicHook> Builder<S, P> {
     /// Create a stackful generator, a.k.a. an asymmetric coroutine.
     ///
     /// This structure also implements [`core::ops::Coroutine`] trait.
-    pub fn gen<'a, F, C, Y, R>(self, func: F) -> Result<Gn<'a, C, Y, R>, NewError>
+    pub fn r#gen<'a, F, C, Y, R>(self, func: F) -> Result<Gn<'a, C, Y, R>, NewError>
     where
         F: FnOnce(&mut YieldHandle<Y, R>, R) -> C + Send + 'a,
     {
@@ -261,7 +261,7 @@ where
 {
     Builder::new()
         .on(stack)
-        .gen(func)
+        .r#gen(func)
         .expect("failed to create a generator")
 }
 
@@ -269,7 +269,7 @@ where
 /// stack.
 ///
 /// This structure also implements [`core::ops::Coroutine`] trait.
-pub fn gen<'a, F, C, Y, R>(func: F) -> Gn<'a, C, Y, R>
+pub fn r#gen<'a, F, C, Y, R>(func: F) -> Gn<'a, C, Y, R>
 where
     F: FnOnce(&mut YieldHandle<Y, R>, R) -> C + Send + 'a,
 {

@@ -223,11 +223,11 @@ impl<Y, R> YieldHandle<Y, R> {
 mod tests {
     use core::ops::CoroutineState;
 
-    use crate::gen;
+    use crate::r#gen;
 
     #[test]
     fn basic() {
-        let mut gn = gen(|y, mut r| {
+        let mut gn = r#gen(|y, mut r| {
             for i in 0..100 {
                 assert_eq!(r, i);
                 r = y.yield_(i);
@@ -245,6 +245,6 @@ mod tests {
     #[test]
     #[should_panic = "What the fuck?"]
     fn panicked() {
-        gen::<_, _, (), _>(|_, _| panic!("What the fuck?")).resume(());
+        r#gen::<_, _, (), _>(|_, _| panic!("What the fuck?")).resume(());
     }
 }
