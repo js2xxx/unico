@@ -92,7 +92,8 @@ where
         arg: F,
     ) -> Result<Self, Self::Error> {
         let Builder { stack, panic_hook } = builder;
-        raw::RawCo::new_on(stack.into(), panic_hook, arg)
+        // SAFETY: The contract is the same.
+        unsafe { raw::RawCo::new_on(stack.into(), panic_hook, arg) }
     }
 }
 
@@ -200,7 +201,7 @@ impl Co {
         let (cx, raw) = Co::into_inner(self);
 
         let mut data = ManuallyDrop::new(map);
-        let ptr = (&mut data as *mut ManuallyDrop<M>).cast();
+        let ptr = ptr::from_mut(&mut data).cast();
 
         let mut data = TransferData {
             raw: CUR.replace(raw.cast()).cast(),
