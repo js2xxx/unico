@@ -46,11 +46,27 @@ pub(crate) fn resume_unwind<R: Resume>(
     }
 }
 
+/// The source of some continuation if the current continuation panics.
+///
+/// The coroutine is built with some implementation of this trait. if the
+/// coroutine panics, the panic payload will be handled to it, which then either
+/// gives back a continuation to be passed on, or simply aborts the whole
+/// control flow, depending on its implementation.
 pub trait PanicHook<R: Resume> {
+    /// The actual process of handling the panic. See [`PanicHook`] for more
+    /// information.
+    ///
+    /// Every function whose signature matches this method automatically
+    /// implements this trait. So no need to create some unit structure if the
+    /// actual type is not used.
     #[cfg(feature = "alloc")]
     fn rewind(self, payload: Box<dyn Any + Send>) -> Co<R>;
 }
 
+/// Aborts the whole control flow if a panic is caught in the current
+/// coroutine/continuation.
+///
+/// See [`PanicHook`] for more information.
 pub struct AbortHook;
 
 impl<R: Resume> PanicHook<R> for AbortHook {
