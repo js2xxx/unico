@@ -16,8 +16,8 @@ std::thread_local! {
         let root = Ucx::new_root();
         Cell::new(LocalTransfer {
             from: None,
-            ucx: root.pointer,
-            on_top: root.on_top,
+            ucx: root.0,
+            on_top: None,
             data: ptr::null_mut(),
         })
     };
@@ -31,25 +31,10 @@ struct LocalTransfer {
     data: *mut (),
 }
 
-impl From<LocalTransfer> for (Ucx, *mut ()) {
-    fn from(value: LocalTransfer) -> Self {
-        (
-            Ucx {
-                pointer: value.from.unwrap(),
-                on_top: value.on_top,
-            },
-            value.data,
-        )
-    }
-}
-
 /// The wrapper type of a pointer to `ucontext_t` with some additional data.
 #[derive(Debug)]
-#[repr(C)]
-pub struct Ucx {
-    pointer: NonNull<ucontext_t>,
-    on_top: Option<Map<Ucx>>,
-}
+#[repr(transparent)]
+pub struct Ucx(NonNull<ucontext_t>);
 
 impl Ucx {
     fn new_root() -> Self {
@@ -62,11 +47,8 @@ impl Ucx {
             "Failed to construct top level context: {:?}",
             IoError::last_os_error()
         );
-        Ucx {
-            // SAFETY: `ret` is initialized by `libc::getcontext`.
-            pointer: NonNull::from(Box::leak(unsafe { ret.assume_init() })),
-            on_top: None,
-        }
+        // SAFETY: `ret` is initialized by `libc::getcontext`.
+        Ucx(NonNull::from(Box::leak(unsafe { ret.assume_init() })))
     }
 
     /// # Safety
@@ -75,8 +57,8 @@ impl Ucx {
     unsafe fn new_on(stack: NonNull<[u8]>, entry: Entry<Ucx>) -> Result<Self, NewError> {
         #[allow(improper_ctypes_definitions)]
         unsafe extern "C" fn wrapper(entry: Entry<Ucx>) {
-            let (ucx, data) = TRANSFER.get().into();
-            entry(ucx, data);
+            let t = TRANSFER.get();
+            entry(Ucx(t.from.unwrap()), t.data);
         }
 
         let pointer: NonNull<ucontext_t> =
@@ -107,22 +89,19 @@ impl Ucx {
             libc::makecontext(ucx, wrapper, 1, entry)
         };
 
-        Ok(Ucx {
-            pointer,
-            on_top: None,
-        })
+        Ok(Ucx(pointer))
     }
 
     /// # Safety
     ///
     /// See [`Resume::resume`] for more information.
-    unsafe fn resume(context: Ucx, data: *mut ()) -> Transfer {
-        let target = context.pointer;
+    unsafe fn resume(context: Ucx, on_top: Option<Map<Ucx>>, data: *mut ()) -> Transfer {
+        let target = context.0;
         let src = TRANSFER.get().ucx;
         TRANSFER.set(LocalTransfer {
             from: Some(src),
-            ucx: context.pointer,
-            on_top: context.on_top,
+            ucx: target,
+            on_top,
             data,
         });
 
@@ -136,12 +115,13 @@ impl Ucx {
             IoError::last_os_error()
         );
 
-        let (mut ucx, data) = TRANSFER.get().into();
-        match ucx.on_top.take() {
-            Some(on_top) => on_top(ucx, data),
+        let t = TRANSFER.get();
+        let ucx = t.from.unwrap();
+        match t.on_top {
+            Some(on_top) => on_top(Ucx(ucx), t.data),
             None => Transfer {
-                context: Some(ucx),
-                data,
+                context: Some(Ucx(ucx)),
+                data: t.data,
             },
         }
     }
@@ -173,16 +153,15 @@ unsafe impl Resume for Ucontext {
     }
 
     unsafe fn resume(&self, cx: Ucx, data: *mut ()) -> Transfer {
-        Ucx::resume(cx, data)
+        Ucx::resume(cx, None, data)
     }
 
     unsafe fn resume_with(
         &self,
-        mut cx: Ucx,
+        cx: Ucx,
         data: *mut (),
         map: Map<Ucx>,
     ) -> crate::Transfer<Ucx> {
-        cx.on_top = Some(map);
-        Ucx::resume(cx, data)
+        Ucx::resume(cx, Some(map), data)
     }
 }

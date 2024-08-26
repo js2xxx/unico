@@ -1,6 +1,5 @@
 #![no_std]
 #![cfg_attr(feature = "ucx", feature(new_uninit))]
-#![feature(pointer_byte_offsets)]
 #![feature(slice_ptr_get)]
 #![feature(strict_provenance)]
 
@@ -45,7 +44,7 @@ pub type Map<C> = unsafe extern "C" fn(cx: C, data: *mut ()) -> Transfer<C>;
 ///
 /// `Context` must have a proper lifetime bound to a specific stack returned by
 /// [`Resume::new_on`].
-pub unsafe trait Resume: Clone {
+pub unsafe trait Resume: Sized + Clone + 'static {
     /// The context reference bound to a specfic stack.
     type Context: 'static;
 
