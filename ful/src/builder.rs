@@ -1,7 +1,10 @@
 use unico_context::{boost::Boost, Resume};
 use unico_stack::{Global, Stack};
 
-use super::{raw::RawCo, AbortHook, Co, NewError, PanicHook};
+use crate::{
+    asym::{Gn, YieldHandle},
+    sym::{raw::RawCo, AbortHook, Co, NewError, PanicHook},
+};
 
 /// The generic builder for the initialization of some coroutine.
 pub struct Builder<R, S, P> {
@@ -63,14 +66,15 @@ impl<R, S, P> Builder<R, S, P> {
     }
 }
 
-impl<R: Resume, S: Into<Stack>, P: PanicHook<R>> Builder<R, S, P> {
+impl<Z: Resume, S: Into<Stack>, P: PanicHook<Z>> Builder<Z, S, P> {
     /// Create a symmetric stackful coroutine.
     ///
-    /// Unlike [`callcc`], the function will not be executed upon creation.
-    pub fn spawn(
-        self,
-        func: impl FnOnce(Option<Co<R>>) -> Co<R> + Send + 'static,
-    ) -> Result<Co<R>, NewError<R>> {
+    /// Unlike [`Builder::callcc`], the function will not be executed upon
+    /// creation.
+    pub fn spawn<F>(self, func: F) -> Result<Co<Z>, NewError<Z>>
+    where
+        F: FnOnce(Option<Co<Z>>) -> Co<Z> + Send + 'static,
+    {
         // SAFETY: The function is `Send` and `'static`.
         unsafe { self.spawn_unchecked(func) }
     }
@@ -84,12 +88,56 @@ impl<R: Resume, S: Into<Stack>, P: PanicHook<R>> Builder<R, S, P> {
     ///   another thread.
     /// - `func` must be `'static`, or the caller must ensure that the returned
     ///   [`Co`] not escape the lifetime of the function.
-    pub unsafe fn spawn_unchecked(
-        self,
-        func: impl FnOnce(Option<Co<R>>) -> Co<R>,
-    ) -> Result<Co<R>, NewError<R>> {
+    pub unsafe fn spawn_unchecked<F>(self, func: F) -> Result<Co<Z>, NewError<Z>>
+    where
+        F: FnOnce(Option<Co<Z>>) -> Co<Z>,
+    {
         RawCo::new_on(self.stack.into(), &self.rs, self.panic_hook, func)
             .map(|context| Co::from_inner(context, self.rs))
+    }
+
+    /// Call the target function with current continuation.
+    ///
+    /// This function creates a symmetric stackful coroutine and immediately
+    /// resume it once.
+    pub fn callcc<F>(self, func: F) -> Result<Option<Co<Z>>, NewError<Z>>
+    where
+        F: FnOnce(Co<Z>) -> Co<Z> + Send + 'static,
+    {
+        self.spawn(|co| func(co.unwrap())).map(Co::resume)
+    }
+
+    /// Like [`Builder::callcc`], but leave some checks on the function to the
+    /// caller.
+    ///
+    /// # Safety
+    ///
+    /// - `func` must be [`Send`], or the caller must not send the coroutine to
+    ///   another thread.
+    /// - `func` must be `'static`, or the caller must ensure that the returned
+    ///   [`Co`] not escape the lifetime of the function.
+    pub unsafe fn callcc_unchecked<F>(self, func: F) -> Result<Option<Co<Z>>, NewError<Z>>
+    where
+        F: FnOnce(Co<Z>) -> Co<Z>,
+    {
+        self.spawn_unchecked(|co| func(co.unwrap())).map(Co::resume)
+    }
+
+    /// Create a stackful generator, a.k.a. an asymmetric coroutine.
+    ///
+    /// This structure also implements [`core::ops::Coroutine`] trait.
+    pub fn gen<'a, F, Y, C, R>(self, func: F) -> Result<Gn<'a, Y, C, R, Z>, NewError<Z>>
+    where
+        F: FnOnce(&mut YieldHandle<'a, Y, C, R, Z>, R) -> C + Send + 'a,
+    {
+        // SAFETY: See `Gn`'s safety notice.
+        let wrapper = unsafe { Gn::wrapper(func) };
+        // SAFETY: We here constrain the function to be the same lifetime as the
+        // generator itself, and the yield handle cannot escape the function as well.
+        // Besides, `func` is `Send`. Also see step 0 of `Gn`'s safety notice.
+        let co = unsafe { self.callcc_unchecked(wrapper) }?;
+        // SAFETY: See step 1 of `Gn`'s safety notice.
+        Ok(unsafe { Gn::from_inner(co) })
     }
 }
 
@@ -173,9 +221,36 @@ where
 ///   another thread.
 /// - `func` must be `'static`, or the caller must ensure that the returned
 ///   [`Co`] not escape the lifetime of the function.
+#[cfg(feature = "global-stack-allocator")]
 pub unsafe fn callcc_unchecked<F>(func: F) -> Option<Co>
 where
     F: FnOnce(Co) -> Co,
 {
     spawn_unchecked(|co| func(co.unwrap())).resume()
+}
+
+/// Create a stackful generator, a.k.a. an asymmetric coroutine.
+///
+/// This structure also implements [`core::ops::Coroutine`] trait.
+pub fn gen_on<'a, S, F, Y, C, R>(stack: S, func: F) -> Gn<'a, Y, C, R, Boost>
+where
+    S: Into<Stack>,
+    F: FnOnce(&mut YieldHandle<'a, Y, C, R, Boost>, R) -> C + Send + 'a,
+{
+    Builder::new()
+        .on(stack)
+        .gen(func)
+        .expect("failed to create a generator")
+}
+
+/// Create a stackful generator, a.k.a. an asymmetric coroutine, on a specific
+/// stack.
+///
+/// This structure also implements [`core::ops::Coroutine`] trait.
+#[cfg(feature = "global-stack-allocator")]
+pub fn gen<'a, F, Y, C, R>(func: F) -> Gn<'a, Y, C, R, Boost>
+where
+    F: FnOnce(&mut YieldHandle<'a, Y, C, R, Boost>, R) -> C + Send + 'a,
+{
+    gen_on(&Global, func)
 }

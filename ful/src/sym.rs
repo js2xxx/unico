@@ -1,6 +1,5 @@
-mod builder;
 mod layout;
-mod raw;
+pub(crate) mod raw;
 
 #[cfg(feature = "unwind")]
 use alloc::boxed::Box;
@@ -13,12 +12,10 @@ use core::{
 };
 
 use unico_context::{boost::Boost, Resume, Transfer};
-use unico_stack::Stack;
+use unico_stack::{Global, Stack};
 
-pub use self::{
-    builder::*,
-    raw::{AbortHook, PanicHook},
-};
+pub use self::raw::{AbortHook, PanicHook};
+use crate::Builder;
 
 #[derive(Debug)]
 pub enum NewError<R: Resume> {
@@ -50,7 +47,7 @@ unsafe impl<R: Resume + Send + Sync> Sync for Co<R> {}
 impl<R: Resume + Unpin> Unpin for Co<R> {}
 
 impl<R: Resume> Co<R> {
-    fn from_inner(context: R::Context, rs: R) -> Self {
+    pub(crate) fn from_inner(context: R::Context, rs: R) -> Self {
         Co {
             context: ManuallyDrop::new(context),
             rs: ManuallyDrop::new(rs),
@@ -69,7 +66,7 @@ impl<R: Resume> Co<R> {
 
 impl Co<Boost> {
     /// Initiate a builder for a coroutine with some defaults.
-    pub const fn builder() -> Builder<Boost, &'static unico_stack::Global, AbortHook> {
+    pub const fn builder() -> Builder<Boost, &'static Global, AbortHook> {
         Builder::new()
     }
 }
@@ -205,7 +202,7 @@ mod tests {
 
     use unico_stack::global_stack_allocator;
 
-    use super::*;
+    use crate::{callcc, spawn, spawn_unchecked};
 
     global_stack_allocator!(Global);
 

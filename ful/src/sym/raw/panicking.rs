@@ -76,12 +76,12 @@ impl<R: Resume> PanicHook<R> for AbortHook {
     }
 }
 
+#[cfg(feature = "unwind")]
 impl<T, R> PanicHook<R> for T
 where
     T: FnOnce(Box<dyn Any + Send>) -> Co<R>,
     R: Resume,
 {
-    #[cfg(feature = "unwind")]
     fn rewind(self, payload: Box<dyn Any + Send>) -> Co<R> {
         self(payload)
     }
