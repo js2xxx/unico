@@ -184,8 +184,13 @@ pub trait SchedulerExt: Scheduler {
             assert!(other.is_none(), "A task escaped from enqueueing!");
             let mut cx = SchedContext::new(self);
             f(&mut cx);
-            cx.schedule(drop);
-            unreachable!("Zombie task detected!")
+            loop {
+                if let Some(next) = cx.dequeue() {
+                    let _ = next.metadata.switch();
+                    break next.co;
+                }
+                hint::spin_loop()
+            }
         })?;
         Ok(Task { co, metadata })
     }

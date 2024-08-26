@@ -10,8 +10,9 @@ const CONTEXT_LEN: usize = CONTEXT_SIZE / mem::size_of::<usize>();
 #[repr(transparent)]
 pub struct Fcx(#[allow(dead_code)] [usize; CONTEXT_LEN]);
 
+// SAFETY: These functions are imported from Boost.
 #[link(name = "boost_context")]
-extern "C" {
+unsafe extern "C" {
     /// Creates a new `Context` on top of some stack.
     #[link_name = "make_fcontext"]
     fn new_on(stack_top: NonNull<()>, size: usize, entry: Entry<Fcx>) -> NonNull<Fcx>;

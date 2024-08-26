@@ -205,7 +205,8 @@ unsafe impl<T: Allocator + Clone> StackAllocator for T {
     }
 }
 
-extern "Rust" {
+// SAFETY: This function is implemented by `global_stack_allocator!`.
+unsafe extern "Rust" {
     /// # Safety
     ///
     /// See [`Stack::new`] for more information. All the requirements of that

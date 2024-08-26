@@ -209,9 +209,9 @@ impl Co {
 impl Drop for Co {
     fn drop(&mut self) {
         #[allow(unused_variables)]
-        // SAFETY： We don't use `self.cx` and `self.raw` any longer after taking out data
-        // from these fields. The safety proof of `cx::resume_with` is the same as the
-        // one in `Co::resume_payloaded`.
+        // SAFETY： We don't use `self.cx`any longer after taking out data from these
+        // fields. The safety proof of `cx::resume_with` is the same as the one in
+        // `Co::resume_payloaded`.
         unsafe {
             let cx = self.cx;
             #[cfg(any(feature = "unwind", feature = "std"))]

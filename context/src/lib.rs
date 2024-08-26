@@ -129,7 +129,8 @@ fn stack_top<T>(stack: NonNull<[u8]>) -> Option<NonNull<T>> {
     ret.try_into().map(|addr| ptr.with_addr(addr).cast()).ok()
 }
 
-extern "Rust" {
+// SAFETY: These functions are implemented by `global_resumer!`.
+unsafe extern "Rust" {
     fn __rust_unico_context_new(
         stack: NonNull<u8>,
         stack_size: usize,
