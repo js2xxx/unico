@@ -6,6 +6,7 @@ use alloc::boxed::Box;
 #[cfg(any(feature = "unwind", feature = "std"))]
 use core::any::Any;
 use core::{
+    cell::Cell,
     mem::{self, ManuallyDrop},
     ptr::{self, NonNull},
 };
@@ -14,8 +15,12 @@ use unico_context as cx;
 use unico_context::Transfer;
 use unico_stack::{Global, Stack};
 
+use self::raw::TransferData;
 pub use self::raw::{AbortHook, PanicHook};
 use crate::{Build, BuildUnchecked, Builder, NewError};
+
+#[thread_local]
+static CUR: Cell<*mut ()> = Cell::new(ptr::null_mut());
 
 /// A continuation of the current control flow.
 ///
@@ -27,21 +32,25 @@ use crate::{Build, BuildUnchecked, Builder, NewError};
 /// alongside with the whole stack allocation will be ***LEAKED***. It's because
 /// the dropping process requires unwinding, and thus a `Box<dyn Any + Send>`.
 #[derive(Debug)]
-pub struct Co(NonNull<()>);
+pub struct Co {
+    cx: NonNull<()>,
+    raw: *mut Stack,
+}
 
 // SAFETY: The bounds of the actual function will be checked in the builder.
 unsafe impl Send for Co {}
 unsafe impl Sync for Co {}
 
 impl Co {
-    fn from_inner(cx: NonNull<()>) -> Self {
-        Co(cx)
+    fn from_inner(cx: NonNull<()>, raw: *mut Stack) -> Self {
+        Co { cx, raw }
     }
 
-    fn into_inner(this: Self) -> NonNull<()> {
-        let cx = this.0;
+    fn into_inner(this: Self) -> (NonNull<()>, *mut Stack) {
+        let cx = this.cx;
+        let raw = this.raw;
         mem::forget(this);
-        cx
+        (cx, raw)
     }
 }
 
@@ -83,7 +92,7 @@ where
         arg: F,
     ) -> Result<Self, Self::Error> {
         let Builder { stack, panic_hook } = builder;
-        raw::RawCo::new_on(stack.into(), panic_hook, arg).map(Co::from_inner)
+        raw::RawCo::new_on(stack.into(), panic_hook, arg)
     }
 }
 
@@ -94,7 +103,11 @@ impl Co {
     /// alongside with this object's ownership. Note that the return value may
     /// not be the same [`Co`] as the callee because this method is symmetric.
     pub fn resume(self) -> Option<Self> {
-        let cx = Co::into_inner(self);
+        let (cx, raw) = Co::into_inner(self);
+        let mut data = TransferData {
+            raw: CUR.replace(raw.cast()).cast(),
+            payload: ptr::null_mut(),
+        };
         // SAFETY: `cx`'s lifetime is bound to its own coroutine, and it is ALWAYS
         // THE UNIQUE REFERENCE to the runtime stack. The proof is divided into 2
         // points:
@@ -128,9 +141,9 @@ impl Co {
         //
         //    Thus, though the naming of variables will be a bit rough, the statement
         // actually proves to be true.
-        let Transfer { context, .. } = unsafe { cx::resume(cx, ptr::null_mut()) };
-
-        context.map(Co::from_inner)
+        let Transfer { context, data } = unsafe { cx::resume(cx, data.as_mut()) };
+        let data = unsafe { TransferData::read(data) };
+        context.map(|cx| Co::from_inner(cx, data.raw))
     }
 
     /// Similar to [`Co::resume`], but maps the source of this continuation,
@@ -168,10 +181,15 @@ impl Co {
     /// valid. The caller must maintains this manually, usually by calling this
     /// function in pairs.
     pub unsafe fn resume_payloaded(self, payload: *mut ()) -> (Option<Self>, *mut ()) {
-        let cx = Co::into_inner(self);
+        let (cx, raw) = Co::into_inner(self);
+        let mut data = TransferData {
+            raw: CUR.replace(raw.cast()).cast(),
+            payload,
+        };
         // SAFETY: See `Co::resume` for more informaion.
-        let Transfer { context, data } = unsafe { cx::resume(cx, payload) };
-        (context.map(Co::from_inner), data)
+        let Transfer { context, data } = unsafe { cx::resume(cx, data.as_mut()) };
+        let data = unsafe { TransferData::read(data) };
+        (context.map(|cx| Co::from_inner(cx, data.raw)), data.payload)
     }
 
     /// Similar to [`Co::resume_with`], but with a possibly-returned pointer
@@ -186,16 +204,22 @@ impl Co {
         self,
         map: M,
     ) -> (Option<Self>, *mut ()) {
-        let cx = Co::into_inner(self);
+        let (cx, raw) = Co::into_inner(self);
 
         let mut data = ManuallyDrop::new(map);
         let ptr = (&mut data as *mut ManuallyDrop<M>).cast();
 
+        let mut data = TransferData {
+            raw: CUR.replace(raw.cast()).cast(),
+            payload: ptr,
+        };
+
         // SAFETY: The proof is the same as the one in `Co::resume`.
         let Transfer { context, data } =
-            unsafe { cx::resume_with(cx, ptr, raw::map::<M>) };
+            unsafe { cx::resume_with(cx, data.as_mut(), raw::map::<M>) };
+        let data = unsafe { TransferData::read(data) };
 
-        (context.map(Co::from_inner), data)
+        (context.map(|cx| Co::from_inner(cx, data.raw)), data.payload)
     }
 
     /// Resume the unwinding for this coroutine's partial destruction process.
@@ -222,9 +246,12 @@ impl Drop for Co {
         // data from these fields. The safety proof of `rx.resume_with` is the same as the
         // one in `Co::resume`.
         unsafe {
-            let cx = self.0;
-            #[cfg(any(feature = "unwind", feature = "std"))]
-            cx::resume_with(cx, ptr::null_mut(), raw::unwind);
+            let cx = self.cx;
+            let raw = self.raw;
+            if !raw.is_null() {
+                #[cfg(any(feature = "unwind", feature = "std"))]
+                cx::resume_with(cx, ptr::null_mut(), raw::unwind);
+            }
         }
     }
 }
@@ -250,6 +277,16 @@ mod tests {
     #[test]
     fn empty() {
         assert!(callcc(identity).is_none());
+    }
+
+    #[test]
+    fn panicked() {
+        callcc(|co| {
+            super::Co::builder()
+                .hook_panic_with(move |_| co)
+                .spawn(|_| panic!("What the fuck?"))
+                .unwrap()
+        });
     }
 
     #[test]

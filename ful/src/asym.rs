@@ -243,16 +243,8 @@ mod tests {
 
     #[cfg(feature = "std")]
     #[test]
+    #[should_panic = "What the fuck?"]
     fn panicked() {
-        use core::{alloc::Layout, panic::AssertUnwindSafe};
-
-        use crate::gen_on;
-
-        let mut gn = gen_on::<_, _, _, (), _>(
-            Layout::from_size_align(4096 * 6, 4096).unwrap(),
-            |_, _| panic!("What the fuck?"),
-        );
-        let res = crate::unwind::catch_unwind(AssertUnwindSafe(|| gn.resume(())));
-        assert!(res.is_err());
+        gen::<_, _, (), _>(|_, _| panic!("What the fuck?")).resume(());
     }
 }

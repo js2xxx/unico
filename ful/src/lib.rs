@@ -5,6 +5,7 @@
 #![feature(coroutine_trait)]
 #![feature(coroutines)]
 #![feature(strict_provenance)]
+#![feature(thread_local)]
 
 macro_rules! ct {
     ($e:expr) => {
