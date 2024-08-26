@@ -61,6 +61,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "unico"
+version = "0.1.0"
+dependencies = [
+ "unico-async",
+ "unico-context",
+ "unico-ful",
+ "unico-stack",
+]
+
+[[package]]
 name = "unico-async"
 version = "0.1.0"
 dependencies = [
