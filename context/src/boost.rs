@@ -1,4 +1,4 @@
-use core::{convert::Infallible, ffi::c_void, ptr::NonNull};
+use core::{ffi::c_void, ptr::NonNull};
 
 use crate::{stack_top, Context, Entry, Map};
 
@@ -36,17 +36,23 @@ pub type Transfer = crate::Transfer<Fcx>;
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Boost;
 
+#[derive(Debug)]
+pub enum NewError {
+    StackTooSmall,
+}
+
 unsafe impl Context for Boost {
     type Context = Fcx;
 
-    type NewError = Infallible;
+    type NewError = NewError;
 
     unsafe fn new_on(
         &self,
         stack: NonNull<[u8]>,
         entry: Entry<Fcx>,
-    ) -> Result<Fcx, Infallible> {
-        let top: NonNull<()> = unsafe { stack_top(stack).unwrap() };
+    ) -> Result<Fcx, NewError> {
+        let top: NonNull<()> =
+            unsafe { stack_top(stack) }.ok_or(NewError::StackTooSmall)?;
         Ok(self::new_on(top, stack.len(), entry))
     }
 
