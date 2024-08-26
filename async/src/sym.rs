@@ -73,7 +73,7 @@ unsafe impl Switch for () {
 /// This trait only concerns about "run queues", not "wait queues". The user
 /// should use [`Waker`](core::task::Waker)s for the item of their own wait
 /// queues.
-pub trait Scheduler<M: Switch>: Sized + Clone + 'static {
+pub trait Scheduler<M: Switch = ()>: Sized + Clone + 'static {
     /// Push a task to a run queue of the scheduler for execution.
     fn enqueue(&self, task: Task<M>);
 
@@ -83,7 +83,7 @@ pub trait Scheduler<M: Switch>: Sized + Clone + 'static {
     /// Yield the current running task to another.
     ///
     /// `f` decides whether the current running task should be moved to a wait
-    /// queue for some event, or be re-enqueue immediately (a.k.a. yielded).
+    /// queue for some event, or be requeued immediately (a.k.a. yielded).
     fn yield_to(&self, next: Task<M>, f: impl FnOnce(Task<M>) -> Option<Task<M>>) {
         let other = next.co.resume_with(|co| {
             let metadata = next.metadata.switch();
@@ -98,7 +98,7 @@ pub trait Scheduler<M: Switch>: Sized + Clone + 'static {
     /// Schedule the current running task for another chance for execution.
     ///
     /// `f` decides whether the current running task should be moved to a wait
-    /// queue for some event, or be re-enqueue immediately (a.k.a. yielded).
+    /// queue for some event, or be requeued immediately (a.k.a. yielded).
     fn schedule(&self, f: impl FnOnce(Task<M>) -> Option<Task<M>>) {
         if let Some(next) = self.dequeue() {
             self.yield_to(next, f)
