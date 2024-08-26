@@ -4,8 +4,7 @@ name = "unico-async"
 version = "0.1.0"
 
 [features]
-default = ["std", "global-stack-allocator"]
-global-stack-allocator = ["unico-ful/global-stack-allocator", "unico-stack/global-allocator"]
+default = ["std"]
 std = ["unico-ful/std"]
 unwind = ["unico-ful/unwind"]
 

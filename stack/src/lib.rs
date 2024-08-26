@@ -66,14 +66,12 @@ impl Drop for Stack {
     }
 }
 
-#[cfg(feature = "global-allocator")]
 impl Default for Stack {
     fn default() -> Self {
         Self::from(DEFAULT_LAYOUT)
     }
 }
 
-#[cfg(feature = "global-allocator")]
 impl From<Layout> for Stack {
     fn from(layout: Layout) -> Self {
         Self::from((&Global, layout))
@@ -196,7 +194,6 @@ unsafe impl<T: Allocator + Clone> StackAllocator for T {
     }
 }
 
-#[cfg(feature = "global-allocator")]
 extern "Rust" {
     /// # Safety
     ///
@@ -211,7 +208,6 @@ extern "Rust" {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Global;
 
-#[cfg(feature = "global-allocator")]
 unsafe impl StackAllocator for Global {
     fn allocate(&self, layout: Layout) -> Result<Stack, AllocError> {
         unsafe { __rust_unico_allocate_stack(layout) }
@@ -222,7 +218,6 @@ unsafe impl StackAllocator for Global {
 ///
 /// This macro works just like `#[global_allocator]` attribute, except it only
 /// receives the ident, while the actual definition can lie elsewhere.
-#[cfg(feature = "global-allocator")]
 #[allow_internal_unstable(allocator_api)]
 #[macro_export]
 macro_rules! global_stack_allocator {

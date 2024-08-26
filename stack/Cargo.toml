@@ -1,8 +1,4 @@
 [package]
+edition = "2021"
 name = "unico-stack"
 version = "0.1.0"
-edition = "2021"
-
-[features]
-global-allocator = []
-default = ["global-allocator"]
