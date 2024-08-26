@@ -6,9 +6,11 @@ version = "0.1.0"
 [features]
 boost = ["dep:cc"]
 default = ["boost"]
+ucx = ["dep:libc"]
 
 [dependencies]
 cfg-if = "1.0"
+libc = {version = "0.2", optional = true}
 
 [build-dependencies]
 cc = {version = "1.0", optional = true}

@@ -1,6 +1,6 @@
 use core::{convert::Infallible, ffi::c_void, ptr::NonNull};
 
-use crate::{stack_top, Transfer, Yield};
+use crate::{stack_top, Entry, Map, Yield};
 
 #[repr(transparent)]
 pub struct Fcx(NonNull<c_void>);
@@ -10,14 +10,14 @@ extern "C" {
     /// Creates a new `Context` on top of some stack.
     #[link_name = "make_fcontext"]
     fn new_on(
-        stack_top: NonNull<u8>,
+        stack_top: NonNull<()>,
         size: usize,
-        entry: extern "C" fn(t: FcxTransfer) -> !,
+        entry: extern "C" fn(t: Transfer) -> !,
     ) -> Fcx;
 
     /// Yields the execution to another `Context`.
     #[link_name = "jump_fcontext"]
-    fn resume(target: Fcx, data: *mut ()) -> FcxTransfer;
+    fn resume(target: Fcx, data: *mut ()) -> Transfer;
 
     /// Yields the execution to another `Context` and executes a function on
     /// top of that stack.
@@ -25,11 +25,11 @@ extern "C" {
     fn resume_with(
         target: Fcx,
         data: *mut (),
-        map: extern "C" fn(t: FcxTransfer) -> FcxTransfer,
-    ) -> FcxTransfer;
+        map: extern "C" fn(t: Transfer) -> Transfer,
+    ) -> Transfer;
 }
 
-pub type FcxTransfer = Transfer<Fcx>;
+pub type Transfer = crate::Transfer<Fcx>;
 
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Boost;
@@ -42,21 +42,17 @@ unsafe impl Yield for Boost {
     unsafe fn new_on(
         &self,
         stack: NonNull<[u8]>,
-        entry: extern "C" fn(t: Transfer<Self::Context>) -> !,
-    ) -> Result<Self::Context, Infallible> {
-        let top = unsafe { stack_top(stack, 0) };
+        entry: Entry<Fcx>,
+    ) -> Result<Fcx, Infallible> {
+        let top: NonNull<()> = unsafe { stack_top(stack).unwrap() };
         Ok(self::new_on(top, stack.len(), entry))
     }
 
-    unsafe fn resume(&self, t: Transfer<Self::Context>) -> Transfer<Self::Context> {
+    unsafe fn resume(&self, t: Transfer) -> Transfer {
         self::resume(t.context, t.data)
     }
 
-    unsafe fn resume_with(
-        &self,
-        t: Transfer<Self::Context>,
-        map: extern "C" fn(t: Transfer<Self::Context>) -> Transfer<Self::Context>,
-    ) -> Transfer<Self::Context> {
+    unsafe fn resume_with(&self, t: Transfer, map: Map<Fcx>) -> Transfer {
         self::resume_with(t.context, t.data, map)
     }
 }
