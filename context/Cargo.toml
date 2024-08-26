@@ -7,5 +7,8 @@ version = "0.1.0"
 boost = ["dep:cc"]
 default = ["boost"]
 
+[dependencies]
+cfg-if = "1.0"
+
 [build-dependencies]
 cc = {version = "1.0", optional = true}

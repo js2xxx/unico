@@ -1,5 +1,12 @@
 #![no_std]
 #![feature(slice_ptr_get)]
+#![feature(strict_provenance)]
+
+cfg_if::cfg_if! {
+    if #[cfg(feature = "boost")] {
+        pub mod boost;
+    }
+}
 
 use core::ptr::NonNull;
 
@@ -57,69 +64,8 @@ pub unsafe trait Yield {
     }
 }
 
-#[cfg(feature = "boost")]
-mod boost {
-    use core::{convert::Infallible, ffi::c_void, ptr::NonNull};
-
-    use crate::{Transfer, Yield};
-
-    #[repr(transparent)]
-    pub struct Fcx(NonNull<c_void>);
-
-    #[link(name = "boost_context")]
-    extern "C" {
-        /// Creates a new `Context` on top of some stack.
-        #[link_name = "make_fcontext"]
-        fn new_on(
-            stack: NonNull<u8>,
-            size: usize,
-            entry: extern "C" fn(t: FcxTransfer) -> !,
-        ) -> Fcx;
-
-        /// Yields the execution to another `Context`.
-        #[link_name = "jump_fcontext"]
-        fn resume(target: Fcx, data: *mut ()) -> FcxTransfer;
-
-        /// Yields the execution to another `Context` and executes a function on
-        /// top of that stack.
-        #[link_name = "ontop_fcontext"]
-        fn resume_with(
-            target: Fcx,
-            data: *mut (),
-            map: extern "C" fn(t: FcxTransfer) -> FcxTransfer,
-        ) -> FcxTransfer;
-    }
-
-    pub type FcxTransfer = Transfer<Fcx>;
-
-    #[derive(Debug, Copy, Clone, Default)]
-    pub struct Boost;
-
-    unsafe impl Yield for Boost {
-        type Context = Fcx;
-
-        type NewError = Infallible;
-
-        unsafe fn new_on(
-            &self,
-            stack: NonNull<[u8]>,
-            entry: extern "C" fn(t: Transfer<Self::Context>) -> !,
-        ) -> Result<Self::Context, Infallible> {
-            Ok(self::new_on(stack.as_non_null_ptr(), stack.len(), entry))
-        }
-
-        unsafe fn resume(&self, t: Transfer<Self::Context>) -> Transfer<Self::Context> {
-            self::resume(t.context, t.data)
-        }
-
-        unsafe fn resume_with(
-            &self,
-            t: Transfer<Self::Context>,
-            map: extern "C" fn(t: Transfer<Self::Context>) -> Transfer<Self::Context>,
-        ) -> Transfer<Self::Context> {
-            self::resume_with(t.context, t.data, map)
-        }
-    }
+unsafe fn stack_top<T>(stack: NonNull<[u8]>, sub: usize) -> NonNull<T> {
+    let ptr = stack.as_non_null_ptr();
+    ptr.map_addr(|addr| (addr.get() + stack.len() - sub).try_into().unwrap())
+        .cast()
 }
-#[cfg(feature = "boost")]
-pub use crate::boost::*;
