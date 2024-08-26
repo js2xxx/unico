@@ -11,7 +11,7 @@ use unico_context::{Resume, Transfer};
 use unwinding::panic;
 
 pub use self::panicking::*;
-use crate::{layout::extend, Co, NewError, RawStack};
+use crate::{layout::extend, Co, NewError, Stack};
 
 struct Layouts {
     layout: Layout,
@@ -23,7 +23,7 @@ struct Layouts {
 pub(crate) struct RawCo<F, R: Resume, P: PanicHook<R>> {
     rs: *mut R,
     func: *mut F,
-    stack: *mut RawStack,
+    stack: *mut Stack,
     panic_hook: *mut P,
 }
 
@@ -31,7 +31,7 @@ impl<F, R: Resume, P: PanicHook<R>> RawCo<F, R, P> {
     const fn eval_layouts() -> Option<Layouts> {
         let rs = Layout::new::<R>();
         let func = Layout::new::<F>();
-        let stack = Layout::new::<RawStack>();
+        let stack = Layout::new::<Stack>();
         let hook = Layout::new::<P>();
 
         let layout = rs;
@@ -80,7 +80,7 @@ where
     ///
     /// See [`crate::Builder::spawn_unchecked`] for more information.
     pub(crate) unsafe fn new_on(
-        stack: RawStack,
+        stack: Stack,
         rs: &R,
         panic_hook: P,
         func: F,
@@ -108,7 +108,7 @@ where
         };
 
         // SAFETY: The pointer in `stack` is valid according to its constructor
-        // `RawStack::new`.
+        // `Stack::new`.
         let context = unsafe {
             rs.new_on(
                 NonNull::slice_from_raw_parts(stack.base(), rest_size),
