@@ -47,10 +47,10 @@ pub type Map<C> = extern "C" fn(cx: C, data: *mut ()) -> Transfer<C>;
 /// [`Resume::new_on`].
 pub unsafe trait Resume: Clone {
     /// The context reference bound to a specfic stack.
-    type Context: 'static;
+    type Context;
 
     /// The error type returned during creation of some context.
-    type NewError: Sized;
+    type NewError;
 
     /// Creates a new context on top of some stack.
     ///
@@ -67,18 +67,18 @@ pub unsafe trait Resume: Clone {
     /// Yields the execution to the target context 'cx' with `data` passed to
     /// the destination.
     ///
-    /// This function is public while passing in a raw pointer, but is
-    /// considered safe because it never dereference the raw pointer in its
-    /// execution scope.
-    fn resume(&self, cx: Self::Context, data: *mut ()) -> Transfer<Self::Context>;
+    /// # Safety
+    ///
+    /// `cx` must be bound to some valid stack.
+    unsafe fn resume(&self, cx: Self::Context, data: *mut ()) -> Transfer<Self::Context>;
 
     /// Yields the execution to the target context 'cx' with `data` passed to
     /// the destination, and executes a function on top of that stack.
     ///
-    /// This function is public while passing in a raw pointer, but is
-    /// considered safe because it never dereference the raw pointer in its
-    /// execution scope.
-    fn resume_with(
+    /// # Safety
+    ///
+    /// `cx` must be bound to some valid stack.
+    unsafe fn resume_with(
         &self,
         cx: Self::Context,
         data: *mut (),

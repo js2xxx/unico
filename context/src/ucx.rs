@@ -98,7 +98,7 @@ impl Ucx {
         })
     }
 
-    fn resume(context: Ucx, data: *mut ()) -> Transfer {
+    unsafe fn resume(context: Ucx, data: *mut ()) -> Transfer {
         let target = context.pointer;
         let src = TRANSFER.get().ucx;
         TRANSFER.set(LocalTransfer {
@@ -150,17 +150,17 @@ unsafe impl Resume for Ucontext {
         Ucx::new_on(stack, entry)
     }
 
-    fn resume(&self, cx: Ucx, data: *mut ()) -> Transfer {
-        Ucx::resume(cx, data)
+    unsafe fn resume(&self, cx: Ucx, data: *mut ()) -> Transfer {
+        unsafe { Ucx::resume(cx, data) }
     }
 
-    fn resume_with(
+    unsafe fn resume_with(
         &self,
         mut cx: Ucx,
         data: *mut (),
         map: Map<Ucx>,
     ) -> crate::Transfer<Ucx> {
         cx.on_top = Some(map);
-        Ucx::resume(cx, data)
+        unsafe { Ucx::resume(cx, data) }
     }
 }
