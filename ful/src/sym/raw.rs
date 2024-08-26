@@ -11,7 +11,7 @@ use unico_context::{Resume, Transfer};
 use unwinding::panic;
 
 pub use self::panicking::*;
-use crate::{layout::extend, Co, NewError, Stack};
+use super::{layout::extend, Co, NewError, Stack};
 
 struct Layouts {
     layout: Layout,
@@ -20,7 +20,7 @@ struct Layouts {
     offset_hook: usize,
 }
 
-pub(crate) struct RawCo<F, R: Resume, P: PanicHook<R>> {
+pub(super) struct RawCo<F, R: Resume, P: PanicHook<R>> {
     rs: *mut R,
     func: *mut F,
     stack: *mut Stack,
@@ -78,8 +78,8 @@ where
 {
     /// # Safety
     ///
-    /// See [`crate::Builder::spawn_unchecked`] for more information.
-    pub(crate) unsafe fn new_on(
+    /// See `super::Builder::spawn_unchecked` for more information.
+    pub(super) unsafe fn new_on(
         stack: Stack,
         rs: &R,
         panic_hook: P,
@@ -205,7 +205,7 @@ where
 ///
 /// `ptr` must offer a valid tuple of `R` and `M`.
 #[allow(improper_ctypes_definitions)]
-pub(crate) unsafe extern "C" fn map<R: Resume, M: FnOnce(Co<R>) -> Option<Co<R>>>(
+pub(super) unsafe extern "C" fn map<R: Resume, M: FnOnce(Co<R>) -> Option<Co<R>>>(
     cx: R::Context,
     ptr: *mut (),
 ) -> Transfer<R::Context> {
