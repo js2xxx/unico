@@ -4,50 +4,24 @@
 #![feature(core_intrinsics)]
 #![feature(strict_provenance)]
 
+mod layout;
+mod raw;
+pub mod stack;
+
 use core::{
     alloc::Layout,
-    intrinsics::{abort, atomic_cxchg_acqrel_acquire},
     mem::{self, ManuallyDrop},
-    ptr::{self, NonNull},
-    sync::atomic::AtomicU8,
 };
 
 use unico_context::{Context, Transfer};
 
+use crate::{
+    raw::{Header, RawCo},
+    stack::RawStack,
+};
+
 #[cfg(test)]
 extern crate alloc;
-
-pub struct RawStack {
-    pointer: NonNull<u8>,
-    layout: Layout,
-    drop: unsafe fn(NonNull<u8>, Layout),
-}
-
-impl RawStack {
-    /// Creates a new [`RawStack`].
-    ///
-    /// # Safety
-    ///
-    /// `pointer` must contains a valid block of memory of `layout`, and must be
-    /// able to be dropped by `drop`.
-    pub unsafe fn new(
-        pointer: NonNull<u8>,
-        layout: Layout,
-        drop: unsafe fn(NonNull<u8>, Layout),
-    ) -> Self {
-        RawStack {
-            pointer,
-            layout,
-            drop,
-        }
-    }
-}
-
-impl Drop for RawStack {
-    fn drop(&mut self) {
-        unsafe { (self.drop)(self.pointer, self.layout) }
-    }
-}
 
 #[derive(Debug)]
 pub enum NewError<C: Context> {
@@ -89,210 +63,10 @@ impl<C: Context> Drop for Co<C> {
     }
 }
 
-/// The function hasn't been started.
-const INITIALIZED: u8 = 0;
-/// The function has yielded during its execution.
-const STARTED: u8 = 1;
-/// The function has been consumed.
-const FINISHED: u8 = 3;
-
-struct Header<C: Context> {
-    state: AtomicU8,
-    vtable: &'static VTable<C::Context>,
-    stack: RawStack,
-    cx: C,
-}
-
-struct VTable<T> {
-    resume: unsafe fn(Transfer<T>) -> Transfer<T>,
-    drop: unsafe fn(ptr: *mut ()),
-}
-
-struct Layouts {
-    layout: Layout,
-    offset_func: usize,
-}
-
-struct RawCo<F, C: Context> {
-    header: *mut Header<C>,
-    func: *mut F,
-}
-
-const fn max(a: usize, b: usize) -> usize {
-    if a > b {
-        a
-    } else {
-        b
-    }
-}
-
-const fn extend(layout: Layout, next: Layout) -> Option<(Layout, usize)> {
-    let new_align = max(layout.align(), next.align());
-    let pad = layout.padding_needed_for(next.align());
-
-    let offset = match layout.size().checked_add(pad) {
-        Some(offset) => offset,
-        None => return None,
-    };
-    let new_size = match offset.checked_add(next.size()) {
-        Some(new_size) => new_size,
-        None => return None,
-    };
-
-    // The safe constructor is called here to enforce the isize size limit.
-    let layout = unsafe { Layout::from_size_align_unchecked(new_size, new_align) };
-    Some((layout, offset))
-}
-
-impl<F, C: Context> RawCo<F, C> {
-    const fn eval_layouts() -> Option<Layouts> {
-        let header = Layout::new::<Header<C>>();
-        let func = Layout::new::<F>();
-
-        let (layout, offset_func) = match extend(header, func) {
-            Some(union) => union,
-            None => return None,
-        };
-        Some(Layouts {
-            layout,
-            offset_func,
-        })
-    }
-
-    const LAYOUTS: Option<Layouts> = Self::eval_layouts();
-
-    fn layouts() -> Layouts {
-        match Self::LAYOUTS {
-            Some(layouts) => layouts,
-            None => abort(),
-        }
-    }
-
-    fn from_ptr(ptr: *mut ()) -> Self {
-        let layouts = Self::layouts();
-        RawCo {
-            header: ptr.cast(),
-            func: ptr.map_addr(|addr| addr + layouts.offset_func).cast(),
-        }
-    }
-
-    unsafe fn update_state(&self, old: u8, src: u8) -> bool {
-        let state = ptr::addr_of_mut!((*self.header).state);
-        atomic_cxchg_acqrel_acquire(state.cast(), old, src).1
-    }
-}
-
-impl<F, C> RawCo<F, C>
-where
-    F: FnOnce(Co<C>) -> Co<C>,
-    C: Context,
-{
-    fn new_on(
-        stack: RawStack,
-        cx: C,
-        func: F,
-    ) -> Result<Transfer<C::Context>, NewError<C>> {
-        let layouts = Self::layouts();
-        if stack.layout.size() <= layouts.layout.size()
-            || stack.layout.align() < layouts.layout.align()
-        {
-            return Err(NewError::StackTooSmall {
-                expected: layouts.layout,
-                actual: stack.layout,
-            });
-        }
-
-        let (pointer, rest_size) = {
-            let layouts = Self::layouts();
-            let bottom = stack.pointer.as_ptr();
-
-            let addr = bottom.addr() + stack.layout.size() - layouts.layout.size();
-            let addr = addr & !(layouts.layout.align() - 1);
-
-            let pointer = bottom.with_addr(addr).cast();
-            (pointer, addr - bottom.addr())
-        };
-
-        let context = unsafe {
-            cx.new_on(
-                NonNull::slice_from_raw_parts(stack.pointer, rest_size),
-                Self::entry,
-            )
-        }
-        .map_err(NewError::Context)?;
-
-        let raw = Self::from_ptr(pointer);
-        unsafe {
-            raw.header.write(Header {
-                state: AtomicU8::new(INITIALIZED),
-                vtable: Self::VTABLE,
-                stack,
-                cx,
-            });
-            raw.func.write(func);
-        }
-
-        Ok(Transfer {
-            context,
-            data: pointer,
-        })
-    }
-}
-
-impl<F, C> RawCo<F, C>
-where
-    F: FnOnce(Co<C>) -> Co<C>,
-    C: Context,
-{
-    extern "C" fn entry(t: Transfer<C::Context>) -> ! {
-        let task = Self::from_ptr(t.data);
-        unsafe {
-            if task.update_state(INITIALIZED, STARTED) {
-                let ret = (task.func.read())(Co(ManuallyDrop::new(t)));
-
-                task.update_state(STARTED, FINISHED);
-
-                (*task.header).cx.resume_with(ret.into_inner(), Self::exit);
-            }
-        }
-        abort()
-    }
-
-    extern "C" fn exit(t: Transfer<C::Context>) -> Transfer<C::Context> {
-        let task = Self::from_ptr(t.data);
-        unsafe { ptr::drop_in_place(ptr::addr_of_mut!((*task.header).stack)) }
-        Transfer {
-            context: t.context,
-            data: ptr::null_mut(),
-        }
-    }
-}
-
-impl<F, C: Context> RawCo<F, C> {
-    unsafe fn resume(t: Transfer<C::Context>) -> Transfer<C::Context> {
-        let task = Self::from_ptr(t.data);
-        (*task.header).cx.resume(t)
-    }
-
-    unsafe fn drop(ptr: *mut ()) {
-        let task = Self::from_ptr(ptr);
-
-        if task.update_state(INITIALIZED, FINISHED) {
-            ptr::drop_in_place(task.func);
-        }
-        ptr::drop_in_place(ptr::addr_of_mut!((*task.header).stack));
-    }
-
-    const VTABLE: &'static VTable<C::Context> = &VTable {
-        resume: Self::resume,
-        drop: Self::drop,
-    };
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::alloc::{alloc, dealloc};
-    use core::convert::identity;
+    use core::{convert::identity, ptr::NonNull};
 
     use unico_context::{boost::Boost, ucx::Ucontext};
 
