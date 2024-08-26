@@ -1,7 +1,5 @@
-#[cfg(feature = "alloc")]
-use alloc::boxed::Box;
-#[cfg(feature = "alloc")]
-use core::any::Any;
+mod panicking;
+
 use core::{
     alloc::Layout,
     any::type_name,
@@ -12,33 +10,39 @@ use unico_context::{Resume, Transfer};
 #[cfg(feature = "alloc")]
 use unwinding::panic;
 
+pub use self::panicking::*;
 use crate::{layout::extend, Co, NewError, RawStack};
 
 struct Layouts {
     layout: Layout,
     offset_func: usize,
     offset_stack: usize,
+    offset_hook: usize,
 }
 
-pub(crate) struct RawCo<F, R: Resume> {
+pub(crate) struct RawCo<F, R: Resume, P: PanicHook<R>> {
     rs: *mut R,
     func: *mut F,
     stack: *mut RawStack,
+    panic_hook: *mut P,
 }
 
-impl<F, R: Resume> RawCo<F, R> {
+impl<F, R: Resume, P: PanicHook<R>> RawCo<F, R, P> {
     const fn eval_layouts() -> Option<Layouts> {
         let rs = Layout::new::<R>();
         let func = Layout::new::<F>();
         let stack = Layout::new::<RawStack>();
+        let hook = Layout::new::<P>();
 
         let layout = rs;
         let (layout, offset_func) = ct!(extend(layout, func));
         let (layout, offset_stack) = ct!(extend(layout, stack));
+        let (layout, offset_hook) = ct!(extend(layout, hook));
         Some(Layouts {
             layout,
             offset_func,
             offset_stack,
+            offset_hook,
         })
     }
 
@@ -61,18 +65,21 @@ impl<F, R: Resume> RawCo<F, R> {
             rs: ptr.cast(),
             func: ptr.map_addr(|addr| addr + layouts.offset_func).cast(),
             stack: ptr.map_addr(|addr| addr + layouts.offset_stack).cast(),
+            panic_hook: ptr.map_addr(|addr| addr + layouts.offset_hook).cast(),
         }
     }
 }
 
-impl<F, R> RawCo<F, R>
+impl<F, R, P> RawCo<F, R, P>
 where
     F: FnOnce(Option<Co<R>>) -> Co<R>,
     R: Resume,
+    P: PanicHook<R>,
 {
     pub(crate) fn new_on(
         stack: RawStack,
         rs: &R,
+        panic_hook: P,
         func: F,
     ) -> Result<R::Context, NewError<R>> {
         let layouts = Self::layouts();
@@ -114,6 +121,7 @@ where
             raw.rs.write(rs.clone());
             raw.func.write(func);
             raw.stack.write(stack);
+            raw.panic_hook.write(panic_hook);
         }
 
         // SAFETY: The proof is the same as the one in `Co::resume`.
@@ -122,10 +130,11 @@ where
     }
 }
 
-impl<F, R> RawCo<F, R>
+impl<F, R, P> RawCo<F, R, P>
 where
     F: FnOnce(Option<Co<R>>) -> Co<R>,
     R: Resume,
+    P: PanicHook<R>,
 {
     /// # Safety
     ///
@@ -135,6 +144,8 @@ where
 
         // SAFETY: The task is valid by contract.
         let rs = unsafe { (*task.rs).clone() };
+        #[cfg(feature = "alloc")]
+        let hook = unsafe { task.panic_hook.read() };
 
         let run = || {
             // SAFETY: The task is valid by contract. `func` must be read before the
@@ -142,22 +153,21 @@ where
             let func = unsafe { task.func.read() };
             // SAFETY: The proof is the same as the one in `Co::resume`.
             let Transfer { context, .. } = unsafe { rs.resume(cx, ptr) };
-            let co = context.map(|cx| Co::from_inner(cx, rs));
-            func(co)
+            func(context.map(|cx| Co::from_inner(cx, rs)))
         };
 
         #[cfg(feature = "alloc")]
         let context = {
+            // Move the hook in the braces to make sure it drops when the control flow
+            // goes out of the scope.
+            let hook = hook;
             let result = panic::catch_unwind(run);
             match result {
                 Ok(co) => Co::into_inner(co).0,
-                Err(payload) => {
-                    let msg =
-                        "Uncaught panic in the root of a symmetric coroutine. Aborting";
-                    let hd: HandleDrop<R::Context> =
-                        *payload.downcast().unwrap_or_else(|_| unreachable!("{msg}"));
-                    hd.0
-                }
+                Err(payload) => match payload.downcast::<HandleDrop<R::Context>>() {
+                    Ok(hd) => hd.0,
+                    Err(payload) => Co::into_inner(hook.rewind(payload)).0,
+                },
             }
         };
         #[cfg(not(feature = "alloc"))]
@@ -187,42 +197,6 @@ where
         }
     }
 }
-
-#[cfg(feature = "alloc")]
-mod panicking {
-    use super::*;
-    #[repr(transparent)]
-    pub(crate) struct HandleDrop<C>(pub C);
-
-    // SAFETY: If the actual context is not `Send`, then the coroutine will also not
-    // be `Send`, thus, preventing sending the context to another thread and unwinds
-    // there.
-    unsafe impl<C> Send for HandleDrop<C> {}
-
-    #[allow(improper_ctypes_definitions)]
-    pub(crate) extern "C" fn unwind<R: Resume>(
-        cx: R::Context,
-        _: *mut (),
-    ) -> Transfer<R::Context> {
-        panic::begin_panic(Box::new(HandleDrop(cx)));
-        unreachable!("Unwind erroneously returned.")
-    }
-
-    pub(crate) fn resume_unwind<R: Resume>(
-        _: &Co<R>,
-        payload: Box<dyn Any + Send>,
-    ) -> Box<dyn Any + Send> {
-        match payload.downcast::<HandleDrop<R::Context>>() {
-            Ok(data) => {
-                panic::begin_panic(data);
-                unreachable!("Unwind erroneously returned.")
-            }
-            Err(p) => p,
-        }
-    }
-}
-#[cfg(feature = "alloc")]
-pub(crate) use panicking::*;
 
 /// # Safety
 ///

@@ -28,6 +28,7 @@ use core::{
 
 use unico_context::{Resume, Transfer};
 
+pub use crate::raw::{AbortHook, PanicHook};
 use crate::{raw::RawCo, stack::RawStack};
 
 #[cfg(feature = "alloc")]
@@ -81,7 +82,8 @@ impl<R: Resume> Co<R> {
         rs: R,
         func: impl FnOnce(Option<Self>) -> Self,
     ) -> Result<Self, NewError<R>> {
-        RawCo::new_on(stack, &rs, func).map(|context| Co::from_inner(context, rs))
+        RawCo::new_on(stack, &rs, raw::AbortHook, func)
+            .map(|context| Co::from_inner(context, rs))
     }
 
     /// Move the current control flow to this continuation.
