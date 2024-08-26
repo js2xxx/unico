@@ -7,7 +7,7 @@ use std::{boxed::Box, io::Error as IoError};
 
 use libc::ucontext_t;
 
-use crate::{stack_top, Entry, Yield};
+use crate::{stack_top, Context, Entry};
 
 type Transfer = crate::Transfer<Ucx>;
 
@@ -44,6 +44,7 @@ impl From<Transfer> for LocalTransfer {
     }
 }
 
+/// The POSIX library's [`makecontext`](https://man7.org/linux/man-pages/man3/makecontext.3.html) functions.
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct Ucx(NonNull<ucontext_t>);
@@ -113,7 +114,7 @@ pub enum NewError {
     GetContext(IoError),
 }
 
-unsafe impl Yield for Ucontext {
+unsafe impl Context for Ucontext {
     type Context = Ucx;
 
     type NewError = NewError;

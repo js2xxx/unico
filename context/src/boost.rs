@@ -1,7 +1,8 @@
 use core::{convert::Infallible, ffi::c_void, ptr::NonNull};
 
-use crate::{stack_top, Entry, Map, Yield};
+use crate::{stack_top, Context, Entry, Map};
 
+/// [`Boost.Context`](https://github.com/boostorg/context/) with its `fcontext_t` functions.
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct Fcx(NonNull<c_void>);
@@ -35,7 +36,7 @@ pub type Transfer = crate::Transfer<Fcx>;
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Boost;
 
-unsafe impl Yield for Boost {
+unsafe impl Context for Boost {
     type Context = Fcx;
 
     type NewError = Infallible;
