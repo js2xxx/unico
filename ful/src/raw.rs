@@ -133,7 +133,7 @@ where
     F: FnOnce(Option<Co<R>>) -> Co<R>,
     R: Resume,
 {
-    extern "C" fn entry(cx: R::Context, ptr: *mut ()) -> ! {
+    unsafe extern "C" fn entry(cx: R::Context, ptr: *mut ()) -> ! {
         let task = Self::from_ptr(ptr);
 
         let rs = unsafe { (*task.header).rs.clone() };
@@ -152,7 +152,7 @@ where
     }
 
     #[allow(improper_ctypes_definitions)]
-    extern "C" fn exit(_: R::Context, ptr: *mut ()) -> Transfer<R::Context> {
+    unsafe extern "C" fn exit(_: R::Context, ptr: *mut ()) -> Transfer<R::Context> {
         let task = Self::from_ptr(ptr);
         unsafe {
             ptr::drop_in_place(ptr::addr_of_mut!((*task.header).rs));
@@ -162,5 +162,18 @@ where
             context: None,
             data: ptr::null_mut(),
         }
+    }
+}
+
+#[allow(improper_ctypes_definitions)]
+pub(crate) unsafe extern "C" fn map<R: Resume, M: FnOnce(Co<R>) -> Option<Co<R>>>(
+    cx: R::Context,
+    ptr: *mut (),
+) -> Transfer<R::Context> {
+    let (rs, func) = unsafe { ptr.cast::<(R, M)>().read() };
+    let ret = func(Co { context: cx, rs });
+    Transfer {
+        context: ret.map(|Co { context, .. }| context),
+        data: ptr::null_mut(),
     }
 }

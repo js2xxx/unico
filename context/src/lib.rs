@@ -35,9 +35,9 @@ pub struct Transfer<T> {
     pub data: *mut (),
 }
 
-pub type Entry<C> = extern "C" fn(cx: C, data: *mut ()) -> !;
+pub type Entry<C> = unsafe extern "C" fn(cx: C, data: *mut ()) -> !;
 #[allow(improper_ctypes_definitions)]
-pub type Map<C> = extern "C" fn(cx: C, data: *mut ()) -> Transfer<C>;
+pub type Map<C> = unsafe extern "C" fn(cx: C, data: *mut ()) -> Transfer<C>;
 
 /// The generic symmetric context-switching trait.
 ///
@@ -69,7 +69,8 @@ pub unsafe trait Resume: Clone {
     ///
     /// # Safety
     ///
-    /// `cx` must be bound to some valid stack.
+    /// `cx` must be bound to some valid stack, and `data` must be valid
+    /// according to `entry` passed to [`Resume::new_on`].
     unsafe fn resume(&self, cx: Self::Context, data: *mut ()) -> Transfer<Self::Context>;
 
     /// Yields the execution to the target context 'cx' with `data` passed to
@@ -77,8 +78,9 @@ pub unsafe trait Resume: Clone {
     ///
     /// # Safety
     ///
-    /// `cx` must be bound to some valid stack, and the return value of `map`
-    /// must contains a possible valid [`Resume::Context`] wrapped in an option.
+    /// `cx` must be bound to some valid stack, the return value of `map` must
+    /// contains a possible valid [`Resume::Context`] wrapped in an option, and
+    /// `data` must be valid according to `entry` passed to [`Resume::new_on`].
     unsafe fn resume_with(
         &self,
         cx: Self::Context,

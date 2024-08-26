@@ -43,6 +43,7 @@ impl From<LocalTransfer> for (Ucx, *mut ()) {
     }
 }
 
+/// The wrapper type of a pointer to `ucontext_t` with some additional data.
 #[derive(Debug)]
 #[repr(C)]
 pub struct Ucx {
@@ -73,7 +74,7 @@ impl Ucx {
     /// See [`Resume::new_on`] for more information.
     unsafe fn new_on(stack: NonNull<[u8]>, entry: Entry<Ucx>) -> Result<Self, NewError> {
         #[allow(improper_ctypes_definitions)]
-        extern "C" fn wrapper(entry: Entry<Ucx>) {
+        unsafe extern "C" fn wrapper(entry: Entry<Ucx>) {
             let (ucx, data) = TRANSFER.get().into();
             entry(ucx, data);
         }
@@ -102,7 +103,8 @@ impl Ucx {
         // SAFETY: `ucx` is initialized by `libc::getcontext`; `wrapper` has exactly 1
         // parameter.
         unsafe {
-            libc::makecontext(ucx, mem::transmute(wrapper as extern "C" fn(_)), 1, entry)
+            let wrapper = mem::transmute(wrapper as unsafe extern "C" fn(_));
+            libc::makecontext(ucx, wrapper, 1, entry)
         };
 
         Ok(Ucx {
@@ -145,7 +147,7 @@ impl Ucx {
     }
 }
 
-/// The POSIX library's [`makecontext`](https://man7.org/linux/man-pages/man3/makecontext.3.html) series functions.
+/// The [`Resume`] implementation with the POSIX library's [`makecontext`](https://man7.org/linux/man-pages/man3/makecontext.3.html) functionalities.
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Ucontext;
 
