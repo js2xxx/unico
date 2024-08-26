@@ -12,13 +12,13 @@ use core::{
 };
 
 use unico_context::{boost::Boost, Resume};
-use unico_stack::Global;
+use unico_stack::{Global, Stack};
 
 #[cfg(any(feature = "unwind", feature = "std"))]
 use crate::unwind::*;
 use crate::{
-    sym::{AbortHook, Co},
-    Builder,
+    sym::{AbortHook, Co, PanicHook},
+    Build, BuildUnchecked, Builder, NewError, Sealed,
 };
 
 enum Yield<Y, C> {
@@ -72,14 +72,47 @@ pub struct YieldHandle<'a, C, Y, R = (), Z: Resume = Boost> {
 type PhantomYieldHandle<'a, C, Y, R> =
     PhantomData<dyn FnOnce(Yield<Y, C>) -> R + Unpin + Send + UnwindSafe + 'a>;
 
-impl<'a, C, Y, R, Z: Resume> Gn<'a, C, Y, R, Z> {
+impl Gn<'static, (), (), (), Boost> {
+    pub fn builder() -> Builder<Boost, &'static Global, AbortHook> {
+        Builder::new()
+    }
+}
+
+impl<'a, C, Y, R, Z: Resume> Sealed for Gn<'a, C, Y, R, Z> {}
+
+impl<'a, F, C, Y, R, Z, S, P> Build<F, Z, S, P> for Gn<'a, C, Y, R, Z>
+where
+    F: FnOnce(&mut YieldHandle<'a, C, Y, R, Z>, R) -> C + Send + 'a,
+    Z: Resume,
+    S: Into<Stack>,
+    P: PanicHook<Z>,
+{
+    fn build(builder: Builder<Z, S, P>, arg: F) -> Result<Self, Self::Error> {
+        // SAFETY: `arg` is `Send` and `'a`.
+        unsafe { Self::build_unchecked(builder, arg) }
+    }
+}
+
+impl<'a, F, C, Y, R, Z, S, P> BuildUnchecked<F, Z, S, P> for Gn<'a, C, Y, R, Z>
+where
+    F: FnOnce(&mut YieldHandle<'a, C, Y, R, Z>, R) -> C,
+    Z: Resume,
+    S: Into<Stack>,
+    P: PanicHook<Z>,
+{
+    type Error = NewError<Z>;
+
     /// # Safety
     ///
-    /// The caller must observe the type's safety notice.
-    pub(crate) unsafe fn wrapper(
-        func: impl FnOnce(&mut YieldHandle<'a, C, Y, R, Z>, R) -> C + Send + 'a,
-    ) -> impl FnOnce(Co<Z>) -> Co<Z> + 'a {
-        move |co: Co<Z>| {
+    /// - `func` must be [`Send`], or the caller must not send the coroutine to
+    ///   another thread.
+    /// - `func` must be at least `'a`.
+    unsafe fn build_unchecked(
+        builder: Builder<Z, S, P>,
+        func: F,
+    ) -> Result<Self, Self::Error> {
+        // SAFETY: See the type's safety notice.
+        let wrapper = move |co: Co<Z>| {
             // SAFETY: See step 1 of the type's safety notice.
             let res = unsafe { co.resume_with_payload(ptr::null_mut()) };
             let (co, payload) = res.unwrap();
@@ -108,23 +141,15 @@ impl<'a, C, Y, R, Z: Resume> Gn<'a, C, Y, R, Z> {
             // SAFETY: See step 4 of the type's safety notice.
             let res = unsafe { co.resume_with_payload(y.as_mut_ptr().cast()) };
             res.unwrap().0
-        }
-    }
+        };
 
-    /// # Safety
-    ///
-    /// The caller must observe the type's safety notice.
-    pub(crate) unsafe fn from_inner(co: Option<Co<Z>>) -> Self {
-        Gn {
-            inner: co,
+        // SAFETY: We here constrain the function to be the same lifetime as the
+        // generator itself, and the yield handle cannot escape the function as well.
+        // Besides, `func` is `Send`. Also see step 0 of the type's safety notice.
+        Ok(Gn {
+            inner: unsafe { builder.callcc_unchecked(wrapper) }?,
             marker: PhantomData,
-        }
-    }
-}
-
-impl Gn<'static, (), (), (), Boost> {
-    pub fn builder() -> Builder<Boost, &'static Global, AbortHook> {
-        Builder::new()
+        })
     }
 }
 

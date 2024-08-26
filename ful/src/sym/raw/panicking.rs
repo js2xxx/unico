@@ -26,7 +26,7 @@ pub(in crate::sym) extern "C" fn unwind<R: Resume>(
     cx: R::Context,
     _: *mut (),
 ) -> Transfer<R::Context> {
-    unwind::panic_any(HandleDrop(cx))
+    unwind::resume_unwind(Box::new(HandleDrop(cx)))
 }
 
 #[cfg(any(feature = "unwind", feature = "std"))]

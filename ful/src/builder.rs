@@ -3,14 +3,38 @@ use unico_stack::{Global, Stack};
 
 use crate::{
     asym::{Gn, YieldHandle},
-    sym::{raw::RawCo, AbortHook, Co, NewError, PanicHook},
+    sym::{AbortHook, Co, PanicHook},
+    NewError,
 };
 
 /// The generic builder for the initialization of some coroutine.
 pub struct Builder<R, S, P> {
-    rs: R,
-    stack: S,
-    panic_hook: P,
+    pub rs: R,
+    pub stack: S,
+    pub panic_hook: P,
+}
+
+pub(crate) trait Sealed: Sized {}
+
+/// Build a stackful-coroutine-type object from the builder.
+pub trait Build<F, R, S, P>: BuildUnchecked<F, R, S, P> {
+    /// Build a stackful-coroutine-type object from the builder.
+    fn build(builder: Builder<R, S, P>, arg: F) -> Result<Self, Self::Error>;
+}
+
+/// Similar to [`Build`], but leave some check of the arguments to the caller.
+#[allow(private_bounds)]
+pub trait BuildUnchecked<F, R, S, P>: Sealed {
+    type Error;
+
+    /// # Safety
+    ///
+    /// The caller must ensures the type checks that the implementor insists.
+    /// Please see the safety requirements at implementation.
+    unsafe fn build_unchecked(
+        builder: Builder<R, S, P>,
+        arg: F,
+    ) -> Result<Self, Self::Error>;
 }
 
 impl Builder<Boost, &'static Global, AbortHook> {
@@ -67,6 +91,28 @@ impl<R, S, P> Builder<R, S, P> {
 }
 
 impl<Z: Resume, S: Into<Stack>, P: PanicHook<Z>> Builder<Z, S, P> {
+    /// Build a stackful-coroutine-type object from the builder.
+    pub fn build<T, F>(self, arg: F) -> Result<T, T::Error>
+    where
+        T: Build<F, Z, S, P>,
+    {
+        T::build(self, arg)
+    }
+
+    /// Like [`Builder::build`], but leave some checks on the function to the
+    /// caller.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensures the type checks that the implementor insists.
+    /// Please see the safety requirements at implementation.
+    pub unsafe fn build_unchecked<T, F>(self, arg: F) -> Result<T, T::Error>
+    where
+        T: BuildUnchecked<F, Z, S, P>,
+    {
+        T::build_unchecked(self, arg)
+    }
+
     /// Create a symmetric stackful coroutine.
     ///
     /// Unlike [`Builder::callcc`], the function will not be executed upon
@@ -75,8 +121,7 @@ impl<Z: Resume, S: Into<Stack>, P: PanicHook<Z>> Builder<Z, S, P> {
     where
         F: FnOnce(Option<Co<Z>>) -> Co<Z> + Send + 'static,
     {
-        // SAFETY: The function is `Send` and `'static`.
-        unsafe { self.spawn_unchecked(func) }
+        self.build(func)
     }
 
     /// Like [`Builder::spawn`], but leave some checks on the function to the
@@ -92,8 +137,7 @@ impl<Z: Resume, S: Into<Stack>, P: PanicHook<Z>> Builder<Z, S, P> {
     where
         F: FnOnce(Option<Co<Z>>) -> Co<Z>,
     {
-        RawCo::new_on(self.stack.into(), &self.rs, self.panic_hook, func)
-            .map(|context| Co::from_inner(context, self.rs))
+        self.build_unchecked(func)
     }
 
     /// Call the target function with current continuation.
@@ -130,14 +174,7 @@ impl<Z: Resume, S: Into<Stack>, P: PanicHook<Z>> Builder<Z, S, P> {
     where
         F: FnOnce(&mut YieldHandle<'a, C, Y, R, Z>, R) -> C + Send + 'a,
     {
-        // SAFETY: See `Gn`'s safety notice.
-        let wrapper = unsafe { Gn::wrapper(func) };
-        // SAFETY: We here constrain the function to be the same lifetime as the
-        // generator itself, and the yield handle cannot escape the function as well.
-        // Besides, `func` is `Send`. Also see step 0 of `Gn`'s safety notice.
-        let co = unsafe { self.callcc_unchecked(wrapper) }?;
-        // SAFETY: See step 1 of `Gn`'s safety notice.
-        Ok(unsafe { Gn::from_inner(co) })
+        self.build(func)
     }
 }
 

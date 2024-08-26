@@ -1,12 +1,11 @@
 mod layout;
-pub(crate) mod raw;
+mod raw;
 
 #[cfg(any(feature = "unwind", feature = "std"))]
 use alloc::boxed::Box;
 #[cfg(any(feature = "unwind", feature = "std"))]
 use core::any::Any;
 use core::{
-    alloc::Layout,
     mem::{self, ManuallyDrop},
     ptr,
 };
@@ -15,23 +14,17 @@ use unico_context::{boost::Boost, Resume, Transfer};
 use unico_stack::{Global, Stack};
 
 pub use self::raw::{AbortHook, PanicHook};
-use crate::Builder;
-
-#[derive(Debug)]
-pub enum NewError<R: Resume> {
-    StackTooSmall { expected: Layout, actual: Layout },
-    Context(R::NewError),
-}
+use crate::{Build, BuildUnchecked, Builder, NewError, Sealed};
 
 /// A continuation of the current control flow.
 ///
 /// This structure represents a continuation, a.k.a. the handle of a symmetric
 /// coroutine.
 ///
-/// Note that if `alloc` feature is not enabled and the coroutine is dropped
-/// while not resumed to end, all the data on the call stack alongside with the
-/// whole stack allocation will be ***LEAKED***. It's because the dropping
-/// process requires unwinding, and thus a `Box<dyn Any + Send>`.
+/// Note that if neither `unwind` nor `std` feature is enabled and the coroutine
+/// is dropped while not resumed to end, all the data on the call stack
+/// alongside with the whole stack allocation will be ***LEAKED***. It's because
+/// the dropping process requires unwinding, and thus a `Box<dyn Any + Send>`.
 #[derive(Debug)]
 pub struct Co<R: Resume = Boost> {
     context: ManuallyDrop<R::Context>,
@@ -47,7 +40,7 @@ unsafe impl<R: Resume + Send + Sync> Sync for Co<R> {}
 impl<R: Resume + Unpin> Unpin for Co<R> {}
 
 impl<R: Resume> Co<R> {
-    pub(crate) fn from_inner(context: R::Context, rs: R) -> Self {
+    fn from_inner(context: R::Context, rs: R) -> Self {
         Co {
             context: ManuallyDrop::new(context),
             rs: ManuallyDrop::new(rs),
@@ -68,6 +61,50 @@ impl Co<Boost> {
     /// Initiate a builder for a coroutine with some defaults.
     pub const fn builder() -> Builder<Boost, &'static Global, AbortHook> {
         Builder::new()
+    }
+}
+
+impl<R: Resume> Sealed for Co<R> {}
+
+impl<F, R, S, P> Build<F, R, S, P> for Co<R>
+where
+    F: FnOnce(Option<Co<R>>) -> Co<R> + Send + 'static,
+    R: Resume,
+    S: Into<Stack>,
+    P: PanicHook<R>,
+{
+    fn build(builder: Builder<R, S, P>, arg: F) -> Result<Self, Self::Error> {
+        // SAFETY: The function is `Send` and `'static`.
+        unsafe { Self::build_unchecked(builder, arg) }
+    }
+}
+
+impl<F, R, S, P> BuildUnchecked<F, R, S, P> for Co<R>
+where
+    F: FnOnce(Option<Co<R>>) -> Co<R>,
+    R: Resume,
+    S: Into<Stack>,
+    P: PanicHook<R>,
+{
+    type Error = NewError<R>;
+
+    /// # Safety
+    ///
+    /// - `arg` must be [`Send`], or the caller must not send the coroutine to
+    ///   another thread.
+    /// - `arg` must be `'static`, or the caller must ensure that the returned
+    ///   [`Co`] not escape the lifetime of the function.
+    unsafe fn build_unchecked(
+        builder: Builder<R, S, P>,
+        arg: F,
+    ) -> Result<Self, Self::Error> {
+        let Builder {
+            rs,
+            stack,
+            panic_hook,
+        } = builder;
+        raw::RawCo::new_on(stack.into(), &rs, panic_hook, arg)
+            .map(|context| Co::from_inner(context, rs))
     }
 }
 
