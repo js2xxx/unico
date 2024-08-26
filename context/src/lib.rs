@@ -35,10 +35,9 @@ pub struct Transfer<T> {
     pub data: *mut (),
 }
 
+pub type Entry<C> = extern "C" fn(cx: C, data: *mut ()) -> !;
 #[allow(improper_ctypes_definitions)]
-pub type Entry<C> = extern "C" fn(t: Transfer<C>) -> !;
-#[allow(improper_ctypes_definitions)]
-pub type Map<C> = extern "C" fn(t: Transfer<C>) -> Transfer<C>;
+pub type Map<C> = extern "C" fn(cx: C, data: *mut ()) -> Transfer<C>;
 
 /// The generic symmetric context-switching trait.
 ///
@@ -65,27 +64,26 @@ pub unsafe trait Resume: Clone {
         entry: Entry<Self::Context>,
     ) -> Result<Self::Context, Self::NewError>;
 
-    /// Yields the execution to the target context in transfer structure `t`.
+    /// Yields the execution to the target context 'cx' with `data` passed to
+    /// the destination.
     ///
-    /// # Safety
-    ///
-    /// The `t` must contains a valid context bound to a specific stack.
-    unsafe fn resume(&self, t: Transfer<Self::Context>) -> Transfer<Self::Context>;
+    /// This function is public while passing in a raw pointer, but is
+    /// considered safe because it never dereference the raw pointer in its
+    /// execution scope.
+    fn resume(&self, cx: Self::Context, data: *mut ()) -> Transfer<Self::Context>;
 
-    /// Yields the execution to the target context in transfer structure `t` and
-    /// executes a function on top of that stack.
+    /// Yields the execution to the target context 'cx' with `data` passed to
+    /// the destination, and executes a function on top of that stack.
     ///
-    /// # Safety
-    ///
-    /// The `t` must contains a valid context bound to a specific stack, and the
-    /// `map` function must returns a valid transfer structure.
-    unsafe fn resume_with(
+    /// This function is public while passing in a raw pointer, but is
+    /// considered safe because it never dereference the raw pointer in its
+    /// execution scope.
+    fn resume_with(
         &self,
-        t: Transfer<Self::Context>,
+        cx: Self::Context,
+        data: *mut (),
         map: Map<Self::Context>,
-    ) -> Transfer<Self::Context> {
-        map(self.resume(t))
-    }
+    ) -> Transfer<Self::Context>;
 }
 
 fn layout_union(l1: Layout, l2: Layout) -> Layout {

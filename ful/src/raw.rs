@@ -129,11 +129,7 @@ where
             raw.stack.write(stack);
         }
 
-        let initial = Transfer {
-            context: Some(context),
-            data: pointer,
-        };
-        Ok(unsafe { rs.resume(initial) }.context.unwrap())
+        Ok(rs.resume(context, pointer).context.unwrap())
     }
 }
 
@@ -142,13 +138,11 @@ where
     F: FnOnce(Co<R>) -> Co<R>,
     R: Resume,
 {
-    #[allow(improper_ctypes_definitions)]
-    extern "C" fn entry(t: Transfer<R::Context>) -> ! {
-        let data = t.data;
-        let task = Self::from_ptr(data);
+    extern "C" fn entry(cx: R::Context, ptr: *mut ()) -> ! {
+        let task = Self::from_ptr(ptr);
 
         let rs = unsafe { (*task.header).rs.clone() };
-        let Transfer { context, .. } = unsafe { rs.resume(t) };
+        let Transfer { context, .. } = rs.resume(cx, ptr);
         unsafe {
             if task.update_state(INITIALIZED, STARTED) {
                 let Co { context, .. } = (task.func.read())(Co {
@@ -158,19 +152,15 @@ where
 
                 task.update_state(STARTED, FINISHED);
 
-                let r#final = Transfer {
-                    context: Some(context),
-                    data,
-                };
-                (*task.header).rs.resume_with(r#final, Self::exit);
+                (*task.header).rs.resume_with(context, ptr, Self::exit);
             }
         }
         abort()
     }
 
     #[allow(improper_ctypes_definitions)]
-    extern "C" fn exit(t: Transfer<R::Context>) -> Transfer<R::Context> {
-        let task = Self::from_ptr(t.data);
+    extern "C" fn exit(_: R::Context, ptr: *mut ()) -> Transfer<R::Context> {
+        let task = Self::from_ptr(ptr);
         unsafe {
             ptr::drop_in_place(ptr::addr_of_mut!((*task.header).rs));
             drop(task.stack.read())

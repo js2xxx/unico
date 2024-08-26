@@ -40,12 +40,7 @@ impl<R: Resume> Co<R> {
 
     pub fn resume(self) -> Option<Self> {
         let Co { context, rs } = self;
-        let Transfer { context, .. } = unsafe {
-            rs.resume(Transfer {
-                context: Some(context),
-                data: ptr::null_mut(),
-            })
-        };
+        let Transfer { context, .. } = rs.resume(context, ptr::null_mut());
         context.map(|context| Co { context, rs })
     }
 }
