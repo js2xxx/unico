@@ -1,17 +1,18 @@
 [package]
 edition = "2021"
-name = "unico-ful"
+name = "unico-fut"
 version = "0.1.0"
 
 [features]
 default = ["std", "global-stack-allocator"]
-global-stack-allocator = ["unico-stack/global-allocator"]
-std = []
-unwind = ["dep:unwinding"]
+global-stack-allocator = ["unico-ful/global-stack-allocator", "unico-stack/global-allocator"]
+std = ["unico-ful/std"]
+unwind = ["unico-ful/unwind"]
 
 [dependencies]
 # Local crates
 unico-context = {path = "../context", default-features = false, features = ["boost"]}
+unico-ful = {path = "../ful", default-features = false}
 unico-stack = {path = "../stack", default-features = false}
 # External crates
-unwinding = {version = "0.2", default-features = false, features = ["panic"], optional = true}
+pin-project = "1.1"

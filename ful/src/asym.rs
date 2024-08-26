@@ -18,7 +18,7 @@ use unico_stack::{Global, Stack};
 use crate::unwind::*;
 use crate::{
     sym::{AbortHook, Co, PanicHook},
-    Build, BuildUnchecked, Builder, NewError, Sealed,
+    Build, BuildUnchecked, Builder, NewError,
 };
 
 enum Payload<Y> {
@@ -89,8 +89,6 @@ impl Gn<'static, ()> {
         Builder::new()
     }
 }
-
-impl<'a, C, Y, R, Z: Resume> Sealed for Gn<'a, C, Y, R, Z> {}
 
 impl<'a, F, C, Y, R, Z, S, P> Build<F, Z, S, P> for Gn<'a, C, Y, R, Z>
 where
