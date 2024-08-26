@@ -1,7 +1,12 @@
-use alloc::sync::Arc;
-use core::mem::{self, discriminant};
+use alloc::{sync::Arc, task::Wake};
+use core::{
+    marker::PhantomData,
+    mem::{self, discriminant, ManuallyDrop},
+    ops::Deref,
+    ptr,
+    task::Waker,
+};
 
-use futures_util::task::{waker_ref, ArcWake, WakerRef};
 use spin::Mutex;
 
 #[non_exhaustive]
@@ -56,7 +61,7 @@ pub struct SchedWaker<S> {
     inner: Mutex<State<S>>,
 }
 
-impl<S: Schedule + Send> SchedWaker<S> {
+impl<S: Schedule + Send + 'static> SchedWaker<S> {
     pub fn new() -> Arc<Self> {
         Arc::new(SchedWaker {
             inner: Default::default(),
@@ -83,13 +88,13 @@ impl<S: Schedule + Send> SchedWaker<S> {
     }
 
     pub fn as_waker<'a>(self: &'a Arc<Self>) -> WakerRef<'a> {
-        waker_ref(self)
+        self.into()
     }
 }
 
-impl<S: Schedule + Send> ArcWake for SchedWaker<S> {
-    fn wake_by_ref(arc_self: &Arc<Self>) {
-        arc_self.inner.lock().wake()
+impl<S: Schedule> Wake for SchedWaker<S> {
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.inner.lock().wake()
     }
 
     fn wake(mut self: Arc<Self>) {
@@ -97,5 +102,30 @@ impl<S: Schedule + Send> ArcWake for SchedWaker<S> {
             Some(w) => w.inner.get_mut().wake(),
             None => SchedWaker::wake_by_ref(&self),
         }
+    }
+}
+
+pub struct WakerRef<'a> {
+    inner: ManuallyDrop<Waker>,
+    marker: PhantomData<&'a Waker>,
+}
+
+impl<'a, W: Wake + Send + Sync + 'static> From<&'a Arc<W>> for WakerRef<'a> {
+    fn from(value: &'a Arc<W>) -> Self {
+        unsafe {
+            let copy = ptr::read(value);
+            WakerRef {
+                inner: ManuallyDrop::new(Waker::from(copy)),
+                marker: PhantomData,
+            }
+        }
+    }
+}
+
+impl Deref for WakerRef<'_> {
+    type Target = Waker;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
