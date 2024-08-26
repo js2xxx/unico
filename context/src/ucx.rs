@@ -43,17 +43,6 @@ impl From<LocalTransfer> for Transfer {
     }
 }
 
-// impl From<Transfer> for LocalTransfer {
-//     fn from(value: Transfer) -> Self {
-//         Self {
-//             ucx: value.context.pointer,
-//             on_top: value.context.on_top,
-//             data: value.data,
-//         }
-//     }
-// }
-
-/// The POSIX library's [`makecontext`](https://man7.org/linux/man-pages/man3/makecontext.3.html) functions.
 #[derive(Debug)]
 #[repr(C)]
 pub struct Ucx {
@@ -133,6 +122,7 @@ impl Ucx {
     }
 }
 
+/// The POSIX library's [`makecontext`](https://man7.org/linux/man-pages/man3/makecontext.3.html) series functions.
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Ucontext;
 
