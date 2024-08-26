@@ -68,7 +68,7 @@ impl<'a, T, R: Resume> Future for Asym<'a, T, R> {
     }
 }
 
-pub trait Wait: Future + Send + Sized {
+pub trait AsymWait: Future + Send + Sized {
     fn wait<R: Resume>(self, cx: &mut AsymContext<R>) -> Self::Output {
         let mut future = core::pin::pin!(self);
         loop {
@@ -81,7 +81,7 @@ pub trait Wait: Future + Send + Sized {
     }
 }
 
-impl<F: Future + Send + Sized> Wait for F {}
+impl<F: Future + Send + Sized> AsymWait for F {}
 
 pub fn sync<'a, T, F>(func: F) -> AsymBuilder<'a, T, Boost, F>
 where

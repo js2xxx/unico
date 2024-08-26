@@ -207,15 +207,18 @@ where
 ///
 /// `ptr` must offer a valid tuple of `R` and `M`.
 #[allow(improper_ctypes_definitions)]
-pub(super) unsafe extern "C" fn map<R: Resume, M: FnOnce(Co<R>) -> Option<Co<R>>>(
+pub(super) unsafe extern "C" fn map<
+    R: Resume,
+    M: FnOnce(Co<R>) -> (Option<Co<R>>, *mut ()),
+>(
     cx: R::Context,
     ptr: *mut (),
 ) -> Transfer<R::Context> {
     // SAFETY: The only reading is safe by contract.
     let (rs, func) = unsafe { ptr.cast::<(R, M)>().read() };
-    let ret = func(Co::from_inner(cx, rs));
+    let (ret, data) = func(Co::from_inner(cx, rs));
     Transfer {
         context: ret.map(|co| Co::into_inner(co).0),
-        data: ptr::null_mut(),
+        data,
     }
 }

@@ -171,16 +171,12 @@ impl<R: Resume> Co<R> {
     ///   the function will be called (consumed) before the transfer completes,
     ///   and thus unable to escape its own lifetime.
     pub fn resume_with<M: FnOnce(Self) -> Option<Self>>(self, map: M) -> Option<Self> {
-        let (context, rs) = Co::into_inner(self);
-
-        let mut data = ManuallyDrop::new((rs.clone(), map));
-        let ptr = (&mut data as *mut ManuallyDrop<(R, M)>).cast();
-
-        // SAFETY: The proof is the same as the one in `Co::resume`.
-        let Transfer { context, .. } =
-            unsafe { rs.resume_with(context, ptr, raw::map::<R, M>) };
-
-        context.map(|context| Co::from_inner(context, rs))
+        let map = move |co| {
+            let co = map(co);
+            (co, ptr::null_mut())
+        };
+        // SAFETY: The payload is unspecified.
+        unsafe { self.resume_with_payloaded(map).0 }
     }
 
     /// Similar to [`Co::resume`], but with a pointer payload.
@@ -205,7 +201,7 @@ impl<R: Resume> Co<R> {
     /// The validity of returned pointer is not guaranteed whether `payload` is
     /// valid. The caller must maintains this manually, usually by calling this
     /// function in pairs.
-    pub unsafe fn resume_with_payloaded<M: FnOnce(Self) -> Option<Self>>(
+    pub unsafe fn resume_with_payloaded<M: FnOnce(Self) -> (Option<Self>, *mut ())>(
         self,
         map: M,
     ) -> (Option<Self>, *mut ()) {
