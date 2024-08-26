@@ -5,12 +5,12 @@
 //! don't have return values. Instead, users can have their own choice of a(n)
 //! sync/async channel that sends the result to somewhere.
 
-mod waker;
+mod cx;
 
-use alloc::sync::Arc;
 use core::{
     future::Future,
     hint,
+    ops::Deref,
     pin::pin,
     task::{Context, Poll},
 };
@@ -21,7 +21,7 @@ use unico_ful::{
 };
 use unico_stack::Stack;
 
-pub use self::waker::{SchedWaker, WakerRef};
+pub use self::cx::{SchedContext, WakerRef};
 
 /// A task that can be spawned in a scheduler.
 #[derive(Debug)]
@@ -78,7 +78,7 @@ unsafe impl Switch for () {
 /// This trait only concerns about "run queues", not "wait queues". The user
 /// should use [`Waker`](core::task::Waker)s for the item of their own wait
 /// queues.
-pub trait Scheduler: Sized + Clone + 'static {
+pub trait Scheduler: Sized {
     type Metadata: Switch;
 
     /// Push a task to a run queue of the scheduler for execution.
@@ -87,19 +87,14 @@ pub trait Scheduler: Sized + Clone + 'static {
     /// Pop a task from a run queue of the scheduler for execution.
     fn dequeue(&self) -> Option<Task<Self::Metadata>>;
 
-    fn into_waker(self) -> Arc<SchedWaker<Self>> {
-        SchedWaker::new(self)
-    }
-
     /// Yield the current running task to another.
     ///
     /// `f` decides whether the current running task should be moved to a wait
     /// queue for some event, or be requeued immediately (a.k.a. yielded).
-    fn yield_to(
-        &self,
-        next: Task<Self::Metadata>,
-        f: impl FnOnce(Task<Self::Metadata>) -> Option<Task<Self::Metadata>>,
-    ) {
+    fn yield_to<F>(&self, next: Task<Self::Metadata>, f: F)
+    where
+        F: FnOnce(Task<Self::Metadata>) -> Option<Task<Self::Metadata>>,
+    {
         let other = next.co.resume_with(|co| {
             let metadata = next.metadata.switch();
             if let Some(next) = f(Task { co, metadata }) {
@@ -117,10 +112,10 @@ pub trait Scheduler: Sized + Clone + 'static {
     ///
     /// Note that this function will not perform the context switch if there's
     /// no other schedulable tasks, which the boolean return value indicates.
-    fn schedule(
-        &self,
-        f: impl FnOnce(Task<Self::Metadata>) -> Option<Task<Self::Metadata>>,
-    ) -> bool {
+    fn schedule<F>(&self, f: F) -> bool
+    where
+        F: FnOnce(Task<Self::Metadata>) -> Option<Task<Self::Metadata>>,
+    {
         if let Some(next) = self.dequeue() {
             self.yield_to(next, f);
             return true;
@@ -144,16 +139,17 @@ pub trait Scheduler: Sized + Clone + 'static {
         f: F,
     ) -> Result<Task<Self::Metadata>, NewError>
     where
-        F: FnOnce(&Self) + Send + 'static,
+        F: FnOnce(&SchedContext<Self>) + Send + 'static,
         S: Into<Stack>,
         P: PanicHook,
-        Self: Send,
+        Self: Send + 'static,
     {
         let co = builder.spawn(move |other| {
             assert!(other.is_none(), "A task escaped from enqueueing!");
-            f(&self);
+            let cx = SchedContext::new(self);
+            f(&cx);
             loop {
-                if self.schedule(|_| None) {
+                if cx.schedule(|_| None) {
                     unreachable!("Zombie task detected!")
                 }
                 hint::spin_loop()
@@ -163,22 +159,33 @@ pub trait Scheduler: Sized + Clone + 'static {
     }
 }
 
+impl<T: Deref<Target = S>, S: Scheduler> Scheduler for T {
+    type Metadata = S::Metadata;
+
+    fn enqueue(&self, task: Task<Self::Metadata>) {
+        (**self).enqueue(task)
+    }
+
+    fn dequeue(&self) -> Option<Task<Self::Metadata>> {
+        (**self).dequeue()
+    }
+}
+
 pub trait SymWait: Future + Send + Sized {
     /// Wait on a future "synchronously".
-    fn wait<S, R, M>(self, sched: S) -> Self::Output
+    fn wait<S, R, M>(self, cx: &SchedContext<S>) -> Self::Output
     where
-        S: Scheduler<Metadata = M> + Send + Sync,
+        S: Scheduler<Metadata = M> + Send + Sync + 'static,
         M: Switch + Send,
     {
-        let waker = sched.into_waker();
         let mut future = pin!(self);
         loop {
             match future
                 .as_mut()
-                .poll(&mut Context::from_waker(&waker.as_waker()))
+                .poll(&mut Context::from_waker(&cx.as_waker()))
             {
                 Poll::Ready(output) => break output,
-                Poll::Pending => waker.wait(),
+                Poll::Pending => cx.wait(),
             }
         }
     }
@@ -201,7 +208,7 @@ mod tests {
 
     struct Fifo(Mutex<VecDeque<Task>>);
 
-    impl Scheduler for Arc<Fifo> {
+    impl Scheduler for Fifo {
         type Metadata = ();
 
         fn enqueue(&self, task: Task<()>) {
