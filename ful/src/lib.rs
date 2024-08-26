@@ -19,9 +19,7 @@ pub mod asym;
 mod builder;
 pub mod sym;
 
-use core::alloc::Layout;
-
-use unico_context::Resume;
+use core::alloc::{AllocError, Layout};
 
 pub use crate::builder::*;
 
@@ -32,9 +30,9 @@ extern crate alloc;
 extern crate std;
 
 #[derive(Debug)]
-pub enum NewError<R: Resume> {
+pub enum NewError {
     StackTooSmall { expected: Layout, actual: Layout },
-    Context(R::NewError),
+    Context(AllocError),
 }
 
 #[cfg(all(not(feature = "std"), feature = "unwind"))]

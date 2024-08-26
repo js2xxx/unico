@@ -11,7 +11,6 @@ use core::{
     ptr,
 };
 
-use unico_context::{boost::Boost, Resume};
 use unico_stack::{Global, Stack};
 
 #[cfg(any(feature = "unwind", feature = "std"))]
@@ -61,8 +60,8 @@ enum Payload<Y> {
 //            * ````````````````````````` |
 //            * ````````````````````````` |
 //     C <- resume <--------------- end execution
-pub struct Gn<'a, C, Y = (), R = (), Z: Resume = Boost> {
-    inner: Option<Co<Z>>,
+pub struct Gn<'a, C, Y = (), R = ()> {
+    inner: Option<Co>,
     marker: PhantomGn<'a, C, Y, R>,
 }
 type PhantomGn<'a, C, Y, R> =
@@ -77,40 +76,38 @@ type PhantomGn<'a, C, Y, R> =
 ///    reference in the main procedure, thus prevents it from escaping from it.
 /// 2. `C` is not required because the main procedure returns a value of that
 ///    type, which has nothing to do with its yield handle.
-pub struct YieldHandle<Y = (), R = (), Z: Resume = Boost> {
-    inner: Option<Co<Z>>,
+pub struct YieldHandle<Y = (), R = ()> {
+    inner: Option<Co>,
     marker: PhantomYieldHandle<Y, R>,
 }
 type PhantomYieldHandle<Y, R> =
     PhantomData<dyn FnOnce(Y) -> R + Unpin + Send + UnwindSafe>;
 
 impl Gn<'static, ()> {
-    pub fn builder() -> Builder<Boost, &'static Global, AbortHook> {
+    pub fn builder() -> Builder<&'static Global, AbortHook> {
         Builder::new()
     }
 }
 
-impl<'a, F, C, Y, R, Z, S, P> Build<F, Z, S, P> for Gn<'a, C, Y, R, Z>
+impl<'a, F, C, Y, R, S, P> Build<F, S, P> for Gn<'a, C, Y, R>
 where
-    F: FnOnce(&mut YieldHandle<Y, R, Z>, R) -> C + Send + 'a,
-    Z: Resume,
+    F: FnOnce(&mut YieldHandle<Y, R>, R) -> C + Send + 'a,
     S: Into<Stack>,
-    P: PanicHook<Z>,
+    P: PanicHook,
 {
-    fn build(builder: Builder<Z, S, P>, arg: F) -> Result<Self, Self::Error> {
+    fn build(builder: Builder<S, P>, arg: F) -> Result<Self, Self::Error> {
         // SAFETY: `arg` is `Send` and `'a`.
         unsafe { Self::build_unchecked(builder, arg) }
     }
 }
 
-impl<'a, F, C, Y, R, Z, S, P> BuildUnchecked<F, Z, S, P> for Gn<'a, C, Y, R, Z>
+impl<'a, F, C, Y, R, S, P> BuildUnchecked<F, S, P> for Gn<'a, C, Y, R>
 where
-    F: FnOnce(&mut YieldHandle<Y, R, Z>, R) -> C,
-    Z: Resume,
+    F: FnOnce(&mut YieldHandle<Y, R>, R) -> C,
     S: Into<Stack>,
-    P: PanicHook<Z>,
+    P: PanicHook,
 {
-    type Error = NewError<Z>;
+    type Error = NewError;
 
     /// # Safety
     ///
@@ -118,11 +115,11 @@ where
     ///   another thread.
     /// - `func` must be at least `'a`.
     unsafe fn build_unchecked(
-        builder: Builder<Z, S, P>,
+        builder: Builder<S, P>,
         func: F,
     ) -> Result<Self, Self::Error> {
         // SAFETY: See the type's safety notice.
-        let wrapper = move |co: Co<Z>| {
+        let wrapper = move |co: Co| {
             // SAFETY: See step 1 of the type's safety notice.
             let (res, payload) = unsafe { co.resume_payloaded(ptr::null_mut()) };
             let co = res.unwrap();
@@ -169,7 +166,7 @@ where
     }
 }
 
-impl<'a, C, Y, R, Z: Resume> Gn<'a, C, Y, R, Z> {
+impl<'a, C, Y, R> Gn<'a, C, Y, R> {
     pub fn resume(&mut self, resumed: R) -> CoroutineState<Y, C> {
         let mut m = MaybeUninit::new(resumed);
         let co = self
@@ -199,7 +196,7 @@ impl<'a, C, Y, R, Z: Resume> Gn<'a, C, Y, R, Z> {
     }
 }
 
-impl<C, Y, R, Z: Resume + Unpin> Coroutine<R> for Gn<'_, C, Y, R, Z> {
+impl<C, Y, R> Coroutine<R> for Gn<'_, C, Y, R> {
     type Yield = Y;
     type Return = C;
 
@@ -208,7 +205,7 @@ impl<C, Y, R, Z: Resume + Unpin> Coroutine<R> for Gn<'_, C, Y, R, Z> {
     }
 }
 
-impl<Y, R, Z: Resume> YieldHandle<Y, R, Z> {
+impl<Y, R> YieldHandle<Y, R> {
     pub fn yield_(&mut self, yielded: Y) -> R {
         let mut y = MaybeUninit::new(Payload::Yielded(yielded));
 

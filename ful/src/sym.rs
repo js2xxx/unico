@@ -10,7 +10,8 @@ use core::{
     ptr::{self, NonNull},
 };
 
-use unico_context::{boost::Boost, Resume, Transfer};
+use unico_context as cx;
+use unico_context::Transfer;
 use unico_stack::{Global, Stack};
 
 pub use self::raw::{AbortHook, PanicHook};
@@ -26,65 +27,50 @@ use crate::{Build, BuildUnchecked, Builder, NewError};
 /// alongside with the whole stack allocation will be ***LEAKED***. It's because
 /// the dropping process requires unwinding, and thus a `Box<dyn Any + Send>`.
 #[derive(Debug)]
-pub struct Co<R: Resume = Boost> {
-    context: NonNull<R::Context>,
-    rs: ManuallyDrop<R>,
-}
+pub struct Co(NonNull<()>);
 
 // SAFETY: The bounds of the actual function will be checked in the builder.
-unsafe impl<R: Resume + Send + Sync> Send for Co<R> {}
-unsafe impl<R: Resume + Send + Sync> Sync for Co<R> {}
+unsafe impl Send for Co {}
+unsafe impl Sync for Co {}
 
-// The auto derivation also requires `Resume::Context` to be `Unpin`, which is
-// unnecessary because the context is already pinned on the stack.
-impl<R: Resume + Unpin> Unpin for Co<R> {}
-
-impl<R: Resume> Co<R> {
-    fn from_inner(context: NonNull<R::Context>, rs: R) -> Self {
-        Co {
-            context,
-            rs: ManuallyDrop::new(rs),
-        }
+impl Co {
+    fn from_inner(cx: NonNull<()>) -> Self {
+        Co(cx)
     }
 
-    fn into_inner(mut this: Self) -> (NonNull<R::Context>, R) {
-        unsafe {
-            let context = this.context;
-            let rs = ManuallyDrop::take(&mut this.rs);
-            mem::forget(this);
-            (context, rs)
-        }
+    fn into_inner(this: Self) -> NonNull<()> {
+        let cx = this.0;
+        mem::forget(this);
+        cx
     }
 }
 
-impl Co<Boost> {
+impl Co {
     /// Initiate a builder for a coroutine with some defaults.
-    pub const fn builder() -> Builder<Boost, &'static Global, AbortHook> {
+    pub const fn builder() -> Builder<&'static Global, AbortHook> {
         Builder::new()
     }
 }
 
-impl<F, R, S, P> Build<F, R, S, P> for Co<R>
+impl<F, S, P> Build<F, S, P> for Co
 where
-    F: FnOnce(Option<Co<R>>) -> Co<R> + Send + 'static,
-    R: Resume,
+    F: FnOnce(Option<Co>) -> Co + Send + 'static,
     S: Into<Stack>,
-    P: PanicHook<R>,
+    P: PanicHook,
 {
-    fn build(builder: Builder<R, S, P>, arg: F) -> Result<Self, Self::Error> {
+    fn build(builder: Builder<S, P>, arg: F) -> Result<Self, Self::Error> {
         // SAFETY: The function is `Send` and `'static`.
         unsafe { Self::build_unchecked(builder, arg) }
     }
 }
 
-impl<F, R, S, P> BuildUnchecked<F, R, S, P> for Co<R>
+impl<F, S, P> BuildUnchecked<F, S, P> for Co
 where
-    F: FnOnce(Option<Co<R>>) -> Co<R>,
-    R: Resume,
+    F: FnOnce(Option<Co>) -> Co,
     S: Into<Stack>,
-    P: PanicHook<R>,
+    P: PanicHook,
 {
-    type Error = NewError<R>;
+    type Error = NewError;
 
     /// # Safety
     ///
@@ -93,34 +79,29 @@ where
     /// - `arg` must be `'static`, or the caller must ensure that the returned
     ///   [`Co`] not escape the lifetime of the function.
     unsafe fn build_unchecked(
-        builder: Builder<R, S, P>,
+        builder: Builder<S, P>,
         arg: F,
     ) -> Result<Self, Self::Error> {
-        let Builder {
-            rs,
-            stack,
-            panic_hook,
-        } = builder;
-        raw::RawCo::new_on(stack.into(), &rs, panic_hook, arg)
-            .map(|context| Co::from_inner(context, rs))
+        let Builder { stack, panic_hook } = builder;
+        raw::RawCo::new_on(stack.into(), panic_hook, arg).map(Co::from_inner)
     }
 }
 
-impl<R: Resume> Co<R> {
+impl Co {
     /// Move the current control flow to this continuation.
     ///
     /// This method moves the current control flow to this continuation,
     /// alongside with this object's ownership. Note that the return value may
     /// not be the same [`Co`] as the callee because this method is symmetric.
     pub fn resume(self) -> Option<Self> {
-        let (context, rs) = Co::into_inner(self);
-        // SAFETY: `context`'s lifetime is bound to its own coroutine, and it is ALWAYS
+        let cx = Co::into_inner(self);
+        // SAFETY: `cx`'s lifetime is bound to its own coroutine, and it is ALWAYS
         // THE UNIQUE REFERENCE to the runtime stack. The proof is divided into 2
         // points:
         //
         // 1. If the coroutines are assymetrically nested, like B in A->B->C, in both A
-        //    and C's context the reference(s) of B seem to coexist. However, the
-        //    statement is that they never coexist at all:
+        //    and C's cx the reference(s) of B seem to coexist. However, the statement
+        //    is that they never coexist at all:
         //
         //    1) Before the resumption from A to B, the reference of B in C is never
         //       instantiated;
@@ -147,9 +128,9 @@ impl<R: Resume> Co<R> {
         //
         //    Thus, though the naming of variables will be a bit rough, the statement
         // actually proves to be true.
-        let Transfer { context, .. } = unsafe { rs.resume(context, ptr::null_mut()) };
+        let Transfer { context, .. } = unsafe { cx::resume(cx, ptr::null_mut()) };
 
-        context.map(|context| Co::from_inner(context, rs))
+        context.map(Co::from_inner)
     }
 
     /// Similar to [`Co::resume`], but maps the source of this continuation,
@@ -187,10 +168,10 @@ impl<R: Resume> Co<R> {
     /// valid. The caller must maintains this manually, usually by calling this
     /// function in pairs.
     pub unsafe fn resume_payloaded(self, payload: *mut ()) -> (Option<Self>, *mut ()) {
-        let (context, rs) = Co::into_inner(self);
+        let cx = Co::into_inner(self);
         // SAFETY: See `Co::resume` for more informaion.
-        let Transfer { context, data } = unsafe { rs.resume(context, payload) };
-        (context.map(|context| Co::from_inner(context, rs)), data)
+        let Transfer { context, data } = unsafe { cx::resume(cx, payload) };
+        (context.map(Co::from_inner), data)
     }
 
     /// Similar to [`Co::resume_with`], but with a possibly-returned pointer
@@ -205,16 +186,16 @@ impl<R: Resume> Co<R> {
         self,
         map: M,
     ) -> (Option<Self>, *mut ()) {
-        let (context, rs) = Co::into_inner(self);
+        let cx = Co::into_inner(self);
 
-        let mut data = ManuallyDrop::new((rs.clone(), map));
-        let ptr = (&mut data as *mut ManuallyDrop<(R, M)>).cast();
+        let mut data = ManuallyDrop::new(map);
+        let ptr = (&mut data as *mut ManuallyDrop<M>).cast();
 
         // SAFETY: The proof is the same as the one in `Co::resume`.
         let Transfer { context, data } =
-            unsafe { rs.resume_with(context, ptr, raw::map::<R, M>) };
+            unsafe { cx::resume_with(cx, ptr, raw::map::<M>) };
 
-        (context.map(|context| Co::from_inner(context, rs)), data)
+        (context.map(Co::from_inner), data)
     }
 
     /// Resume the unwinding for this coroutine's partial destruction process.
@@ -234,17 +215,16 @@ impl<R: Resume> Co<R> {
     }
 }
 
-impl<R: Resume> Drop for Co<R> {
+impl Drop for Co {
     fn drop(&mut self) {
         #[allow(unused_variables)]
-        // SAFETY： We don't use `self.context` and `self.rs` any longer after taking out
+        // SAFETY： We don't use `self.cx` and `self.rs` any longer after taking out
         // data from these fields. The safety proof of `rx.resume_with` is the same as the
         // one in `Co::resume`.
         unsafe {
-            let cx = self.context;
-            let rs = ManuallyDrop::take(&mut self.rs);
+            let cx = self.0;
             #[cfg(any(feature = "unwind", feature = "std"))]
-            rs.resume_with(cx, ptr::null_mut(), raw::unwind::<R>);
+            cx::resume_with(cx, ptr::null_mut(), raw::unwind);
         }
     }
 }
@@ -254,11 +234,13 @@ mod tests {
     use core::convert::identity;
     use std::{alloc::Global, string::String};
 
+    use unico_context::{boost::Boost, global_resumer};
     use unico_stack::global_stack_allocator;
 
     use crate::{callcc, spawn, spawn_unchecked};
 
     global_stack_allocator!(Global);
+    global_resumer!(Boost);
 
     #[test]
     fn creation() {

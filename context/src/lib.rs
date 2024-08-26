@@ -1,5 +1,8 @@
 #![no_std]
 #![cfg_attr(feature = "ucx", feature(new_uninit))]
+#![allow(internal_features)]
+#![feature(allocator_api)]
+#![feature(allow_internal_unstable)]
 #![feature(slice_ptr_get)]
 #![feature(strict_provenance)]
 
@@ -16,7 +19,11 @@ cfg_if::cfg_if! {
 }
 mod page;
 
-use core::{alloc::Layout, fmt::Debug, ptr::NonNull};
+use core::{
+    alloc::{AllocError, Layout},
+    fmt::Debug,
+    ptr::NonNull,
+};
 
 /// The transfer structure between contexts.
 #[derive(Debug)]
@@ -46,7 +53,7 @@ pub type Map<C> = unsafe extern "C" fn(cx: NonNull<C>, data: *mut ()) -> Transfe
 /// [`Resume::new_on`].
 pub unsafe trait Resume: Sized + Clone + 'static {
     /// The context reference bound to a specfic stack.
-    type Context: 'static;
+    type Context: Sized + 'static;
 
     /// The error type returned during creation of some context.
     type NewError: Debug;
@@ -68,8 +75,9 @@ pub unsafe trait Resume: Sized + Clone + 'static {
     ///
     /// # Safety
     ///
-    /// `cx` must be bound to some valid stack, and `data` must be valid
-    /// according to `entry` passed to [`Resume::new_on`].
+    /// `cx` must be created from the current [`Resume::new_on`] and be bound to
+    /// some valid stack, and `data` must be valid according to `entry`
+    /// passed to [`Resume::new_on`].
     unsafe fn resume(
         &self,
         cx: NonNull<Self::Context>,
@@ -81,9 +89,11 @@ pub unsafe trait Resume: Sized + Clone + 'static {
     ///
     /// # Safety
     ///
-    /// `cx` must be bound to some valid stack, the return value of `map` must
-    /// contains a possible valid [`Resume::Context`] wrapped in an option, and
-    /// `data` must be valid according to `entry` passed to [`Resume::new_on`].
+    /// `cx` must be created from the current [`Resume::new_on`] and be bound to
+    /// some valid stack, the return value of `map` must contains a possible
+    /// valid context created from [`Resume::new_on`] wrapped in an option,
+    /// and `data` must be valid according to `entry` passed to
+    /// [`Resume::new_on`].
     unsafe fn resume_with(
         &self,
         cx: NonNull<Self::Context>,
@@ -111,4 +121,104 @@ fn stack_top<T>(stack: NonNull<[u8]>) -> Option<NonNull<T>> {
         return None;
     }
     ret.try_into().map(|addr| ptr.with_addr(addr).cast()).ok()
+}
+
+extern "Rust" {
+    fn __rust_unico_context_new(
+        stack: NonNull<u8>,
+        stack_size: usize,
+        entry: Entry<()>,
+    ) -> Result<NonNull<()>, AllocError>;
+
+    fn __rust_unico_context_resume(cx: NonNull<()>, data: *mut ()) -> Transfer<()>;
+
+    fn __rust_unico_context_resume_with(
+        cx: NonNull<()>,
+        data: *mut (),
+        map: Map<()>,
+    ) -> Transfer<()>;
+}
+
+/// Creates a new context on top of some stack.
+///
+/// # Safety
+///
+/// `stack` must reference to a valid block of enough, fresh memory so that
+/// the context will be created on it.
+pub unsafe fn new_on(
+    stack: NonNull<[u8]>,
+    entry: Entry<()>,
+) -> Result<NonNull<()>, AllocError> {
+    __rust_unico_context_new(stack.as_non_null_ptr(), stack.len(), entry)
+}
+
+/// Yields the execution to the target context 'cx' with `data` passed to
+/// the destination.
+///
+/// # Safety
+///
+/// `cx` must be created from [`new_on`] and be bound to some valid stack, and
+/// `data` must be valid according to `entry` passed to [`new_on`].
+pub unsafe fn resume(cx: NonNull<()>, data: *mut ()) -> Transfer<()> {
+    __rust_unico_context_resume(cx, data)
+}
+
+/// Yields the execution to the target context 'cx' with `data` passed to
+/// the destination, and executes a function on top of that stack.
+///
+/// # Safety
+///
+/// `cx` must be created from [`new_on`] and be bound to some valid stack, the
+/// return value of `map` must contains a possible valid context created from
+/// [`new_on`] wrapped in an option, and `data` must be valid according to
+/// `entry` passed to [`new_on`].
+pub unsafe fn resume_with(cx: NonNull<()>, data: *mut (), map: Map<()>) -> Transfer<()> {
+    __rust_unico_context_resume_with(cx, data, map)
+}
+
+#[macro_export]
+#[allow_internal_unstable(allocator_api)]
+macro_rules! global_resumer {
+    ($t:path) => {
+        #[no_mangle]
+        #[doc(hidden)]
+        unsafe fn __rust_unico_context_new(
+            stack: core::ptr::NonNull<u8>,
+            stack_size: usize,
+            entry: $crate::Entry<()>,
+        ) -> Result<core::ptr::NonNull<()>, core::alloc::AllocError> {
+            $crate::Resume::new_on(
+                &$t,
+                core::ptr::NonNull::slice_from_raw_parts(stack, stack_size),
+                core::mem::transmute(entry),
+            )
+            .map(core::ptr::NonNull::cast)
+            .map_err(|_| core::alloc::AllocError)
+        }
+
+        #[no_mangle]
+        #[doc(hidden)]
+        unsafe fn __rust_unico_context_resume(
+            cx: core::ptr::NonNull<()>,
+            data: *mut (),
+        ) -> $crate::Transfer<()> {
+            let t = $crate::Resume::resume(&$t, core::ptr::NonNull::cast(cx), data);
+            core::mem::transmute(t)
+        }
+
+        #[no_mangle]
+        #[doc(hidden)]
+        unsafe fn __rust_unico_context_resume_with(
+            cx: core::ptr::NonNull<()>,
+            data: *mut (),
+            map: $crate::Map<()>,
+        ) -> $crate::Transfer<()> {
+            core::mem::transmute($crate::Resume::resume_with(
+                &$t,
+                core::ptr::NonNull::cast(cx),
+                data,
+                core::mem::transmute(map),
+            ))
+        }
+    };
 }
