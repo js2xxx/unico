@@ -5,5 +5,7 @@ pub const SIZE: usize = 1 << SHIFT;
 
 // pub const LAYOUT: Layout = unsafe { Layout::from_size_align_unchecked(SIZE,
 // SIZE) };
+
+// SAFETY: The align is a valid align of `usize`.
 pub const STACK_LAYOUT: Layout =
     unsafe { Layout::from_size_align_unchecked(SIZE / 2, mem::align_of::<usize>()) };

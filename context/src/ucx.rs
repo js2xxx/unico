@@ -53,6 +53,7 @@ pub struct Ucx {
 impl Ucx {
     fn new_root() -> Self {
         let mut ret = Box::new_uninit();
+        // SAFETY: `ret` contains a valid block of memory, waiting to be initialized.
         let status = unsafe { libc::getcontext(ret.as_mut_ptr()) };
         assert_eq!(
             status,
@@ -61,11 +62,15 @@ impl Ucx {
             IoError::last_os_error()
         );
         Ucx {
+            // SAFETY: `ret` is initialized by `libc::getcontext`.
             pointer: NonNull::from(Box::leak(unsafe { ret.assume_init() })),
             on_top: None,
         }
     }
 
+    /// # Safety
+    ///
+    /// See [`Resume::new_on`] for more information.
     unsafe fn new_on(stack: NonNull<[u8]>, entry: Entry<Ucx>) -> Result<Self, NewError> {
         #[allow(improper_ctypes_definitions)]
         extern "C" fn wrapper(entry: Entry<Ucx>) {
@@ -77,11 +82,15 @@ impl Ucx {
             stack_top(stack).ok_or(NewError::StackTooSmall)?;
         let ucx = pointer.as_ptr();
 
-        let status = libc::getcontext(ucx);
+        // SAFETY: `ucx` is proper aligned and points to a valid block of uninitialized
+        // memory.
+        let status = unsafe { libc::getcontext(ucx) };
         if status != 0 {
             return Err(NewError::GetContext(IoError::last_os_error()));
         }
 
+        // SAFETY: `ucx` is initialized by `libc::getcontext`; `pointer` is greater than
+        // `stack`'s base pointer by address and points to the same block of memory.
         unsafe {
             let ucx = &mut *ucx;
             ucx.uc_stack.ss_sp = stack.as_ptr().cast();
@@ -90,7 +99,11 @@ impl Ucx {
             ucx.uc_link = ptr::null_mut();
         }
 
-        libc::makecontext(ucx, mem::transmute(wrapper as extern "C" fn(_)), 1, entry);
+        // SAFETY: `ucx` is initialized by `libc::getcontext`; `wrapper` has exactly 1
+        // parameter.
+        unsafe {
+            libc::makecontext(ucx, mem::transmute(wrapper as extern "C" fn(_)), 1, entry)
+        };
 
         Ok(Ucx {
             pointer,
@@ -98,6 +111,9 @@ impl Ucx {
         })
     }
 
+    /// # Safety
+    ///
+    /// See [`Resume::resume`] for more information.
     unsafe fn resume(context: Ucx, data: *mut ()) -> Transfer {
         let target = context.pointer;
         let src = TRANSFER.get().ucx;
@@ -108,6 +124,8 @@ impl Ucx {
             data,
         });
 
+        // SAFETY: Both pointers have their reference to a valid `ucontext_t`
+        // respectively.
         let status = unsafe { libc::swapcontext(src.as_ptr(), target.as_ptr()) };
         assert_eq!(
             status,
@@ -137,6 +155,8 @@ pub enum NewError {
     GetContext(IoError),
 }
 
+// SAFETY: The `ucontext_t` is created on the given stack. See `Ucx::new_on` for
+// more information.
 unsafe impl Resume for Ucontext {
     type Context = Ucx;
 
@@ -151,7 +171,7 @@ unsafe impl Resume for Ucontext {
     }
 
     unsafe fn resume(&self, cx: Ucx, data: *mut ()) -> Transfer {
-        unsafe { Ucx::resume(cx, data) }
+        Ucx::resume(cx, data)
     }
 
     unsafe fn resume_with(
@@ -161,6 +181,6 @@ unsafe impl Resume for Ucontext {
         map: Map<Ucx>,
     ) -> crate::Transfer<Ucx> {
         cx.on_top = Some(map);
-        unsafe { Ucx::resume(cx, data) }
+        Ucx::resume(cx, data)
     }
 }

@@ -33,6 +33,8 @@ pub enum NewError {
     StackTooSmall,
 }
 
+// SAFETY: `Fcx` is created from `stack`. See Boost's assembly file for more
+// information.
 unsafe impl Resume for Boost {
     type Context = Fcx;
 
@@ -43,16 +45,18 @@ unsafe impl Resume for Boost {
         stack: NonNull<[u8]>,
         entry: Entry<Fcx>,
     ) -> Result<Fcx, NewError> {
-        let top: NonNull<()> =
-            unsafe { stack_top(stack) }.ok_or(NewError::StackTooSmall)?;
-        Ok(self::new_on(top, stack.len(), entry))
+        let top: NonNull<()> = stack_top(stack).ok_or(NewError::StackTooSmall)?;
+        // SAFETY: The stack is valid by contract.
+        Ok(unsafe { self::new_on(top, stack.len(), entry) })
     }
 
     unsafe fn resume(&self, cx: Fcx, data: *mut ()) -> Transfer {
+        // SAFETY: `cx` is valid by contract.
         unsafe { self::resume(cx, data) }
     }
 
     unsafe fn resume_with(&self, cx: Fcx, data: *mut (), map: Map<Fcx>) -> Transfer {
+        // SAFETY: `cx` and `map` is valid by contract.
         unsafe { self::resume_with(cx, data, map) }
     }
 }
