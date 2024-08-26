@@ -1,28 +1,28 @@
-#[cfg(feature = "alloc")]
+#[cfg(feature = "unwind")]
 use alloc::boxed::Box;
-#[cfg(feature = "alloc")]
+#[cfg(feature = "unwind")]
 use core::any::Any;
 
 use unico_context::Resume;
-#[cfg(feature = "alloc")]
+#[cfg(feature = "unwind")]
 use unico_context::Transfer;
-#[cfg(feature = "alloc")]
+#[cfg(feature = "unwind")]
 use unwinding::panic;
 
-#[cfg(feature = "alloc")]
+#[cfg(feature = "unwind")]
 use crate::Co;
 
-#[cfg(feature = "alloc")]
+#[cfg(feature = "unwind")]
 #[repr(transparent)]
 pub(crate) struct HandleDrop<C>(pub C);
 
 // SAFETY: If the actual context is not `Send`, then the coroutine will also not
 // be `Send`, thus, preventing sending the context to another thread and unwinds
 // there.
-#[cfg(feature = "alloc")]
+#[cfg(feature = "unwind")]
 unsafe impl<C> Send for HandleDrop<C> {}
 
-#[cfg(feature = "alloc")]
+#[cfg(feature = "unwind")]
 #[allow(improper_ctypes_definitions)]
 pub(crate) extern "C" fn unwind<R: Resume>(
     cx: R::Context,
@@ -32,7 +32,7 @@ pub(crate) extern "C" fn unwind<R: Resume>(
     unreachable!("Unwind erroneously returned.")
 }
 
-#[cfg(feature = "alloc")]
+#[cfg(feature = "unwind")]
 pub(crate) fn resume_unwind<R: Resume>(
     _: &Co<R>,
     payload: Box<dyn Any + Send>,
@@ -59,7 +59,7 @@ pub trait PanicHook<R: Resume> {
     /// Every function whose signature matches this method automatically
     /// implements this trait. So no need to create some unit structure if the
     /// actual type is not used.
-    #[cfg(feature = "alloc")]
+    #[cfg(feature = "unwind")]
     fn rewind(self, payload: Box<dyn Any + Send>) -> Co<R>;
 }
 
@@ -70,13 +70,13 @@ pub trait PanicHook<R: Resume> {
 pub struct AbortHook;
 
 impl<R: Resume> PanicHook<R> for AbortHook {
-    #[cfg(feature = "alloc")]
+    #[cfg(feature = "unwind")]
     fn rewind(self, _: Box<dyn Any + Send>) -> Co<R> {
         unreachable!("Uncaught panic in the root of a symmetric coroutine. Aborting.")
     }
 }
 
-#[cfg(feature = "alloc")]
+#[cfg(feature = "unwind")]
 impl<T, R> PanicHook<R> for T
 where
     T: FnOnce(Box<dyn Any + Send>) -> Co<R>,

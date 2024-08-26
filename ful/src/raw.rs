@@ -7,7 +7,7 @@ use core::{
 };
 
 use unico_context::{Resume, Transfer};
-#[cfg(feature = "alloc")]
+#[cfg(feature = "unwind")]
 use unwinding::panic;
 
 pub use self::panicking::*;
@@ -147,7 +147,7 @@ where
 
         // SAFETY: The task is valid by contract.
         let rs = unsafe { (*task.rs).clone() };
-        #[cfg(feature = "alloc")]
+        #[cfg(feature = "unwind")]
         let hook = unsafe { task.panic_hook.read() };
 
         let run = || {
@@ -159,7 +159,7 @@ where
             func(context.map(|cx| Co::from_inner(cx, rs)))
         };
 
-        #[cfg(feature = "alloc")]
+        #[cfg(feature = "unwind")]
         let context = {
             // Move the hook in the braces to make sure it drops when the control flow
             // goes out of the scope.
@@ -173,7 +173,7 @@ where
                 },
             }
         };
-        #[cfg(not(feature = "alloc"))]
+        #[cfg(not(feature = "unwind"))]
         let context = Co::into_inner(run()).0;
 
         // SAFETY: The proof is the same as the one in `Co::resume`.

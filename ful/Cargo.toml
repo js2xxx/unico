@@ -4,9 +4,9 @@ name = "unico-ful"
 version = "0.1.0"
 
 [features]
-alloc = ["dep:unwinding"]
-default = ["alloc", "global-stack-allocator"]
+default = ["unwind", "global-stack-allocator"]
 global-stack-allocator = ["unico-stack/global-allocator"]
+unwind = ["dep:unwinding"]
 
 [dependencies]
 # Local crates
