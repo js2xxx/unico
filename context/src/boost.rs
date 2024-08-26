@@ -2,6 +2,7 @@ use core::{convert::Infallible, ffi::c_void, ptr::NonNull};
 
 use crate::{stack_top, Entry, Map, Yield};
 
+#[derive(Debug)]
 #[repr(transparent)]
 pub struct Fcx(NonNull<c_void>);
 

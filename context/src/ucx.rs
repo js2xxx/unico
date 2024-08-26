@@ -12,50 +12,63 @@ use crate::{stack_top, Entry, Yield};
 type Transfer = crate::Transfer<Ucx>;
 
 std::thread_local! {
-    static RECORD: Cell<NonNull<Record>> = {
-        Cell::new(Record::new_root())
+    static TRANSFER: Cell<LocalTransfer> = {
+        Cell::new(LocalTransfer {
+            ucx: Ucx::new_root().0,
+            data: ptr::null_mut(),
+        })
     };
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LocalTransfer {
+    ucx: NonNull<ucontext_t>,
+    data: *mut (),
+}
+
+impl From<LocalTransfer> for Transfer {
+    fn from(value: LocalTransfer) -> Self {
+        Self {
+            context: Ucx(value.ucx),
+            data: value.data,
+        }
+    }
+}
+
+impl From<Transfer> for LocalTransfer {
+    fn from(value: Transfer) -> Self {
+        Self {
+            ucx: value.context.0,
+            data: value.data,
+        }
+    }
 }
 
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct Ucx(NonNull<Record>);
+pub struct Ucx(NonNull<ucontext_t>);
 
-struct Record {
-    ucx: ucontext_t,
-    data: *mut (),
-}
-
-impl Record {
-    fn new_root() -> NonNull<Self> {
-        let mut ret = Box::<Self>::new_uninit();
-        let status =
-            unsafe { libc::getcontext(ptr::addr_of_mut!((*ret.as_mut_ptr()).ucx)) };
+impl Ucx {
+    fn new_root() -> Self {
+        let mut ret = Box::new_uninit();
+        let status = unsafe { libc::getcontext(ret.as_mut_ptr()) };
         assert_eq!(
             status,
             0,
             "Failed to construct top level context: {:?}",
             IoError::last_os_error()
         );
-        unsafe { ptr::addr_of_mut!((*ret.as_mut_ptr()).data).write(ptr::null_mut()) };
-        unsafe { NonNull::from(Box::leak(ret.assume_init())) }
+        Ucx(unsafe { NonNull::from(Box::leak(ret.assume_init())) })
     }
 
-    unsafe fn new_on(
-        stack: NonNull<[u8]>,
-        entry: Entry<Ucx>,
-    ) -> Result<NonNull<Self>, NewError> {
+    unsafe fn new_on(stack: NonNull<[u8]>, entry: Entry<Ucx>) -> Result<Self, NewError> {
         extern "C" fn wrapper(entry: Entry<Ucx>) {
-            let current = RECORD.with(|r| r.get());
-            entry(Transfer {
-                context: Ucx(current),
-                data: unsafe { ptr::addr_of_mut!((*current.as_ptr()).data).read() },
-            });
+            entry(TRANSFER.get().into());
         }
 
-        let pointer: NonNull<Self> = stack_top(stack).ok_or(NewError::StackTooSmall)?;
-
-        let ucx = ptr::addr_of_mut!((*pointer.as_ptr()).ucx);
+        let pointer: NonNull<ucontext_t> =
+            stack_top(stack).ok_or(NewError::StackTooSmall)?;
+        let ucx = pointer.as_ptr();
 
         let status = libc::getcontext(ucx);
         if status != 0 {
@@ -72,21 +85,14 @@ impl Record {
 
         libc::makecontext(ucx, mem::transmute(wrapper as extern "C" fn(_)), 1, entry);
 
-        Ok(pointer)
+        Ok(Ucx(pointer))
     }
 
     unsafe fn resume(t: Transfer) -> Transfer {
-        let Transfer {
-            context: Ucx(target),
-            data,
-        } = t;
-        let old = RECORD.with(|r| r.replace(target));
-        ptr::addr_of_mut!((*target.as_ptr()).data).write(data);
+        let target = t.context.0;
+        let old = TRANSFER.replace(t.into());
 
-        let status = libc::swapcontext(
-            ptr::addr_of_mut!((*old.as_ptr()).ucx),
-            ptr::addr_of_mut!((*target.as_ptr()).ucx),
-        );
+        let status = libc::swapcontext(old.ucx.as_ptr(), target.as_ptr());
         assert_eq!(
             status,
             0,
@@ -94,11 +100,7 @@ impl Record {
             IoError::last_os_error()
         );
 
-        let current = RECORD.with(|r| r.get());
-        Transfer {
-            context: Ucx(current),
-            data: ptr::addr_of_mut!((*current.as_ptr()).data).read(),
-        }
+        TRANSFER.get().into()
     }
 }
 
@@ -120,11 +122,11 @@ unsafe impl Yield for Ucontext {
         &self,
         stack: NonNull<[u8]>,
         entry: Entry<Ucx>,
-    ) -> Result<Self::Context, Self::NewError> {
-        Record::new_on(stack, entry).map(Ucx)
+    ) -> Result<Ucx, NewError> {
+        Ucx::new_on(stack, entry)
     }
 
     unsafe fn resume(&self, t: Transfer) -> Transfer {
-        Record::resume(t)
+        Ucx::resume(t)
     }
 }
