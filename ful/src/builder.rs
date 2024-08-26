@@ -56,7 +56,7 @@ impl<R, S, P> Builder<R, S, P> {
     /// Set the panic hook which give a continuation to pass on when the
     /// coroutine panics. Defaults to [`AbortHook`], which simply aborts the
     /// whole process.
-    #[cfg(feature = "unwind")]
+    #[cfg(any(feature = "unwind", feature = "std"))]
     pub fn hook_panic_with<P2>(self, hook: P2) -> Builder<R, S, P2> {
         Builder {
             rs: self.rs,
@@ -126,9 +126,9 @@ impl<Z: Resume, S: Into<Stack>, P: PanicHook<Z>> Builder<Z, S, P> {
     /// Create a stackful generator, a.k.a. an asymmetric coroutine.
     ///
     /// This structure also implements [`core::ops::Coroutine`] trait.
-    pub fn gen<'a, F, Y, C, R>(self, func: F) -> Result<Gn<'a, Y, C, R, Z>, NewError<Z>>
+    pub fn gen<'a, F, C, Y, R>(self, func: F) -> Result<Gn<'a, C, Y, R, Z>, NewError<Z>>
     where
-        F: FnOnce(&mut YieldHandle<'a, Y, C, R, Z>, R) -> C + Send + 'a,
+        F: FnOnce(&mut YieldHandle<'a, C, Y, R, Z>, R) -> C + Send + 'a,
     {
         // SAFETY: See `Gn`'s safety notice.
         let wrapper = unsafe { Gn::wrapper(func) };
@@ -232,10 +232,10 @@ where
 /// Create a stackful generator, a.k.a. an asymmetric coroutine.
 ///
 /// This structure also implements [`core::ops::Coroutine`] trait.
-pub fn gen_on<'a, S, F, Y, C, R>(stack: S, func: F) -> Gn<'a, Y, C, R, Boost>
+pub fn gen_on<'a, S, F, C, Y, R>(stack: S, func: F) -> Gn<'a, C, Y, R, Boost>
 where
     S: Into<Stack>,
-    F: FnOnce(&mut YieldHandle<'a, Y, C, R, Boost>, R) -> C + Send + 'a,
+    F: FnOnce(&mut YieldHandle<'a, C, Y, R, Boost>, R) -> C + Send + 'a,
 {
     Builder::new()
         .on(stack)
@@ -248,9 +248,9 @@ where
 ///
 /// This structure also implements [`core::ops::Coroutine`] trait.
 #[cfg(feature = "global-stack-allocator")]
-pub fn gen<'a, F, Y, C, R>(func: F) -> Gn<'a, Y, C, R, Boost>
+pub fn gen<'a, F, C, Y, R>(func: F) -> Gn<'a, C, Y, R, Boost>
 where
-    F: FnOnce(&mut YieldHandle<'a, Y, C, R, Boost>, R) -> C + Send + 'a,
+    F: FnOnce(&mut YieldHandle<'a, C, Y, R, Boost>, R) -> C + Send + 'a,
 {
     gen_on(&Global, func)
 }

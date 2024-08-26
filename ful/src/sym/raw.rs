@@ -1,5 +1,7 @@
 mod panicking;
 
+#[cfg(any(feature = "unwind", feature = "std"))]
+use core::panic::AssertUnwindSafe;
 use core::{
     alloc::Layout,
     any::type_name,
@@ -7,11 +9,11 @@ use core::{
 };
 
 use unico_context::{Resume, Transfer};
-#[cfg(feature = "unwind")]
-use unwinding::panic;
 
 pub use self::panicking::*;
 use super::{layout::extend, Co, NewError, Stack};
+#[cfg(any(feature = "unwind", feature = "std"))]
+use crate::unwind;
 
 struct Layouts {
     layout: Layout,
@@ -147,7 +149,7 @@ where
 
         // SAFETY: The task is valid by contract.
         let rs = unsafe { (*task.rs).clone() };
-        #[cfg(feature = "unwind")]
+        #[cfg(any(feature = "unwind", feature = "std"))]
         let hook = unsafe { task.panic_hook.read() };
 
         let run = || {
@@ -159,12 +161,12 @@ where
             func(context.map(|cx| Co::from_inner(cx, rs)))
         };
 
-        #[cfg(feature = "unwind")]
+        #[cfg(any(feature = "unwind", feature = "std"))]
         let context = {
             // Move the hook in the braces to make sure it drops when the control flow
             // goes out of the scope.
             let hook = hook;
-            let result = panic::catch_unwind(run);
+            let result = unwind::catch_unwind(AssertUnwindSafe(run));
             match result {
                 Ok(co) => Co::into_inner(co).0,
                 Err(payload) => match payload.downcast::<HandleDrop<R::Context>>() {
@@ -173,7 +175,7 @@ where
                 },
             }
         };
-        #[cfg(not(feature = "unwind"))]
+        #[cfg(not(any(feature = "unwind", feature = "std")))]
         let context = Co::into_inner(run()).0;
 
         // SAFETY: The proof is the same as the one in `Co::resume`.
