@@ -1,3 +1,10 @@
+//! Symmetric scheduling and its [Futures](core::future::Future) integration.
+//!
+//! Unlike the asymmetric one, this module does not contains some function to
+//! convert a symmetric coroutine into a future because symmetric coroutines
+//! don't have return values. Instead, users can have their own choice of a(n)
+//! sync/async channel that sends the result to somewhere.
+
 mod waker;
 
 use core::{
@@ -150,6 +157,7 @@ pub trait Scheduler: Sized + Clone + 'static {
 }
 
 pub trait SymWait: Future + Send + Sized {
+    /// Wait on a future "synchronously".
     fn wait<S, R>(self, sched: S) -> Self::Output
     where
         S: Scheduler + Send + Sync,

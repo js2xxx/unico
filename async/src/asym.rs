@@ -1,3 +1,6 @@
+//! The integration of [futures](core::future::Future) based on asymmetric
+//! stackful coroutines.
+
 use core::{
     future::{Future, IntoFuture},
     marker::PhantomData,
@@ -13,8 +16,15 @@ use unico_ful::{
 };
 use unico_stack::Stack;
 
+/// A [`Future`] based on a stackful generator.
+///
+/// This structure cannot be created directly. [`sync`] should be used instead.
 pub struct Asym<'a, T>(Gn<'a, T, (), Waker>);
 
+/// The context of the execution of the current [`Asym`].
+///
+/// This structure is dual to [`Context`] in futures. Users should pass a
+/// mutable reference of this struct to [`AsymWait::wait`].
 pub struct AsymContext<'y> {
     y: &'y mut YieldHandle<(), Waker>,
     waker: Waker,
@@ -65,6 +75,7 @@ impl<'a, T> Future for Asym<'a, T> {
 }
 
 pub trait AsymWait: Future + Send + Sized {
+    /// Wait on a future "synchronously".
     fn wait(self, cx: &mut AsymContext) -> Self::Output {
         let mut future = core::pin::pin!(self);
         loop {
@@ -79,6 +90,7 @@ pub trait AsymWait: Future + Send + Sized {
 
 impl<F: Future + Send + Sized> AsymWait for F {}
 
+/// Turns a block of sync code into a future.
 pub fn sync<'a, T, F>(func: F) -> AsymBuilder<'a, T, F>
 where
     F: FnOnce(AsymContext) -> T + Send + 'a,
