@@ -111,6 +111,18 @@ pub trait Scheduler: Sized {
     fn dequeue(&self) -> Option<Task<Self::Metadata>>;
 }
 
+impl<T: Deref<Target = S>, S: Scheduler> Scheduler for T {
+    type Metadata = S::Metadata;
+
+    fn enqueue(&self, task: Task<Self::Metadata>) {
+        (**self).enqueue(task)
+    }
+
+    fn dequeue(&self) -> Option<Task<Self::Metadata>> {
+        (**self).dequeue()
+    }
+}
+
 /// The provided methods for [schedulers](Scheduler).
 pub trait SchedulerExt: Scheduler {
     /// Schedule the current running task for another chance for execution.
@@ -118,8 +130,9 @@ pub trait SchedulerExt: Scheduler {
     /// `f` decides the destination of the current running task, such as a wait
     /// queue or a scheduler's run queue.
     ///
-    /// This function is similar to [`try_schedule`](Scheduler::try_schedule),
-    /// but spins when there's no other schedulable tasks.
+    /// This function is similar to
+    /// [`try_schedule`](SchedulerExt::try_schedule), but spins when there's
+    /// no other schedulable tasks.
     fn schedule(&self, f: impl FnOnce(Task<Self::Metadata>)) {
         loop {
             if let Some(next) = self.dequeue() {
@@ -149,7 +162,7 @@ pub trait SchedulerExt: Scheduler {
     /// Yield the current running task to the scheduler.
     ///
     /// This method is a shorthand for
-    /// [`try_schedule(Some)`](Scheduler::schedule).
+    /// [`try_schedule(|t| self.enqueue(t))`](SchedulerExt::try_schedule).
     fn yield_now(&self) -> bool {
         self.try_schedule(|task| self.enqueue(task))
     }
@@ -178,18 +191,6 @@ pub trait SchedulerExt: Scheduler {
     }
 }
 impl<T: Scheduler> SchedulerExt for T {}
-
-impl<T: Deref<Target = S>, S: Scheduler> Scheduler for T {
-    type Metadata = S::Metadata;
-
-    fn enqueue(&self, task: Task<Self::Metadata>) {
-        (**self).enqueue(task)
-    }
-
-    fn dequeue(&self) -> Option<Task<Self::Metadata>> {
-        (**self).dequeue()
-    }
-}
 
 pub trait SymWait: Future + Send + Sized {
     /// Wait on a future "synchronously".
