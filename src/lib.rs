@@ -1,5 +1,4 @@
-//! **UNI**fied **CO**routines.
-
+#![doc = include_str!("../README.md")]
 #![no_std]
 
 pub use unico_context as context;
