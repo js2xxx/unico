@@ -97,6 +97,8 @@ where
             (pointer, addr - bottom.addr())
         };
 
+        // SAFETY: The pointer in `stack` is valid according to its constructor
+        // `RawStack::new`.
         let context = unsafe {
             rs.new_on(
                 NonNull::slice_from_raw_parts(stack.base(), rest_size),
@@ -106,12 +108,15 @@ where
         .map_err(NewError::Context)?;
 
         let raw = Self::from_ptr(pointer);
+        // SAFETY: `raw` is created from `pointer`, which is calculated above and
+        // resides somewhere unique in `stack`.
         unsafe {
             raw.rs.write(rs.clone());
             raw.func.write(func);
             raw.stack.write(stack);
         }
 
+        // SAFETY: The proof is the same as the one in `Co::resume`.
         let resume = unsafe { rs.resume(context, pointer) };
         Ok(resume.context.unwrap())
     }
@@ -122,41 +127,58 @@ where
     F: FnOnce(Option<Co<R>>) -> Co<R>,
     R: Resume,
 {
+    /// # Safety
+    ///
+    /// `ptr` must points to a valid `RawCo` calculated from `RawCo::from_ptr`.
     unsafe extern "C" fn entry(cx: R::Context, ptr: *mut ()) -> ! {
         let task = Self::from_ptr(ptr);
 
+        // SAFETY: The task is valid by contract.
         let rs = unsafe { (*task.rs).clone() };
-        unsafe {
-            let run = || {
-                let Transfer { context, .. } = rs.resume(cx, ptr);
-                let co = context.map(|cx| Co::from_inner(cx, rs));
-                (task.func.read())(co)
-            };
 
-            #[cfg(feature = "alloc")]
-            let context = {
-                let result = panic::catch_unwind(run);
-                match result {
-                    Ok(co) => Co::into_inner(co).0,
-                    Err(payload) => {
-                        let hd: HandleDrop<R::Context> = *payload.downcast().unwrap();
-                        hd.0
-                    }
+        let run = || {
+            // SAFETY: The task is valid by contract. `func` must be read before the
+            // initial resume, in case of early unwinding.
+            let func = unsafe { task.func.read() };
+            // SAFETY: The proof is the same as the one in `Co::resume`.
+            let Transfer { context, .. } = unsafe { rs.resume(cx, ptr) };
+            let co = context.map(|cx| Co::from_inner(cx, rs));
+            func(co)
+        };
+
+        #[cfg(feature = "alloc")]
+        let context = {
+            let result = panic::catch_unwind(run);
+            match result {
+                Ok(co) => Co::into_inner(co).0,
+                Err(payload) => {
+                    let msg =
+                        "Uncaught panic in the root of a symmetric coroutine. Aborting";
+                    let hd: HandleDrop<R::Context> =
+                        *payload.downcast().unwrap_or_else(|_| unreachable!("{msg}"));
+                    hd.0
                 }
-            };
-            #[cfg(not(feature = "alloc"))]
-            let context = Co::into_inner(run()).0;
+            }
+        };
+        #[cfg(not(feature = "alloc"))]
+        let context = Co::into_inner(run()).0;
 
-            (*task.rs).resume_with(context, ptr, Self::exit);
-        }
+        // SAFETY: The proof is the same as the one in `Co::resume`.
+        unsafe { (*task.rs).resume_with(context, ptr, Self::exit) };
         unreachable!("Exiting failed. There's at least some dangling `Co` instance!")
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must points to a valid `RawCo` calculated from `RawCo::from_ptr`.
     #[allow(improper_ctypes_definitions)]
     unsafe extern "C" fn exit(_: R::Context, ptr: *mut ()) -> Transfer<R::Context> {
         let task = Self::from_ptr(ptr);
+        // SAFETY: The task is valid by contract.
         unsafe {
             ptr::drop_in_place(task.rs);
+            // `stack` must not be dropped in place to avoid access to dropped stack
+            // memory.
             drop(task.stack.read())
         }
         Transfer {
@@ -172,10 +194,13 @@ mod panicking {
     #[repr(transparent)]
     pub(crate) struct HandleDrop<C>(pub C);
 
+    // SAFETY: If the actual context is not `Send`, then the coroutine will also not
+    // be `Send`, thus, preventing sending the context to another thread and unwinds
+    // there.
     unsafe impl<C> Send for HandleDrop<C> {}
 
     #[allow(improper_ctypes_definitions)]
-    pub(crate) unsafe extern "C" fn unwind<R: Resume>(
+    pub(crate) extern "C" fn unwind<R: Resume>(
         cx: R::Context,
         _: *mut (),
     ) -> Transfer<R::Context> {
@@ -199,11 +224,15 @@ mod panicking {
 #[cfg(feature = "alloc")]
 pub(crate) use panicking::*;
 
+/// # Safety
+///
+/// `ptr` must offer a valid tuple of `R` and `M`.
 #[allow(improper_ctypes_definitions)]
 pub(crate) unsafe extern "C" fn map<R: Resume, M: FnOnce(Co<R>) -> Option<Co<R>>>(
     cx: R::Context,
     ptr: *mut (),
 ) -> Transfer<R::Context> {
+    // SAFETY: The only reading is safe by contract.
     let (rs, func) = unsafe { ptr.cast::<(R, M)>().read() };
     let ret = func(Co::from_inner(cx, rs));
     Transfer {
