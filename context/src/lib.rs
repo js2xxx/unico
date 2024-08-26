@@ -24,18 +24,20 @@ use core::{alloc::Layout, ptr::NonNull};
 #[repr(C)]
 pub struct Transfer<T> {
     /// The target context to be resumed.
-    pub context: T,
+    pub context: Option<T>,
     /// The data passed between contexts.
     ///
-    /// If the user passes the transfer structure to [`Context::resume`], the
+    /// If the user passes the transfer structure to [`Resume::resume`], the
     /// data will be transferred to the target context.
     ///
-    /// If the user gets the transfer structure from [`Context::resume`] or in
+    /// If the user gets the transfer structure from [`Resume::resume`] or in
     /// the entry function, the data is received from its resumer.
     pub data: *mut (),
 }
 
+#[allow(improper_ctypes_definitions)]
 pub type Entry<C> = extern "C" fn(t: Transfer<C>) -> !;
+#[allow(improper_ctypes_definitions)]
 pub type Map<C> = extern "C" fn(t: Transfer<C>) -> Transfer<C>;
 
 /// The generic symmetric context-switching trait.
@@ -43,8 +45,8 @@ pub type Map<C> = extern "C" fn(t: Transfer<C>) -> Transfer<C>;
 /// # Safety
 ///
 /// `Context` must have a proper lifetime bound to a specific stack returned by
-/// [`Context::new_on`].
-pub unsafe trait Context {
+/// [`Resume::new_on`].
+pub unsafe trait Resume: Clone {
     /// The context reference bound to a specfic stack.
     type Context: 'static;
 

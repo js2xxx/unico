@@ -1,6 +1,6 @@
 use core::{ffi::c_void, ptr::NonNull};
 
-use crate::{stack_top, Context, Entry, Map};
+use crate::{stack_top, Entry, Map, Resume};
 
 /// [`Boost.Context`](https://github.com/boostorg/context/) with its `fcontext_t` functions.
 #[derive(Debug)]
@@ -41,7 +41,7 @@ pub enum NewError {
     StackTooSmall,
 }
 
-unsafe impl Context for Boost {
+unsafe impl Resume for Boost {
     type Context = Fcx;
 
     type NewError = NewError;
@@ -57,10 +57,10 @@ unsafe impl Context for Boost {
     }
 
     unsafe fn resume(&self, t: Transfer) -> Transfer {
-        self::resume(t.context, t.data)
+        self::resume(t.context.unwrap(), t.data)
     }
 
     unsafe fn resume_with(&self, t: Transfer, map: Map<Fcx>) -> Transfer {
-        self::resume_with(t.context, t.data, map)
+        self::resume_with(t.context.unwrap(), t.data, map)
     }
 }
