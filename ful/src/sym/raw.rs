@@ -78,10 +78,18 @@ impl TransferData {
         (self as *mut TransferData).cast()
     }
 
+    /// # Safety
+    ///
+    /// `data` must point to a valid `TransferData` and guarantee a unique
+    /// reference.
     pub unsafe fn from_mut<'a>(data: *mut ()) -> &'a mut Self {
         unsafe { &mut *data.cast::<Self>() }
     }
 
+    /// # Safety
+    ///
+    /// `data` must point to a valid `TransferData` and guarantee a unique
+    /// reference or be null.
     pub unsafe fn read(data: *mut ()) -> Self {
         if data.is_null() {
             TransferData {
@@ -149,7 +157,7 @@ where
             raw.panic_hook.write(panic_hook);
         }
 
-        // SAFETY: The proof is the same as the one in `Co::resume`.
+        // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
         let resume = unsafe { cx::resume(context, pointer) };
         Ok(Co::from_inner(resume.context.unwrap(), raw.stack))
     }
@@ -170,35 +178,37 @@ where
         // SAFETY: The task is valid by contract.
         #[cfg(any(feature = "unwind", feature = "std"))]
         let hook = unsafe { task.panic_hook.read() };
+        // SAFETY: The task is valid by contract. `func` must be read before the
+        // initial resume, in case of early unwinding.
+        let func = unsafe { task.func.read() };
 
         let run = || {
-            // SAFETY: The task is valid by contract. `func` must be read before the
-            // initial resume, in case of early unwinding.
-            let func = unsafe { task.func.read() };
-            // SAFETY: The proof is the same as the one in `Co::resume`.
+            // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
             let Transfer { context, data } = unsafe { cx::resume(cx, ptr) };
+            // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
             let raw = unsafe { TransferData::read(data) }.raw;
             func(context.map(|cx| Co::from_inner(cx, raw)))
         };
 
         #[cfg(any(feature = "unwind", feature = "std"))]
-        let context = {
+        let (context, next) = {
             // Move the hook in the braces to make sure it drops when the control flow
             // goes out of the scope.
             let hook = hook;
-            let result = unwind::catch_unwind(AssertUnwindSafe(run));
-            match result {
-                Ok(co) => Co::into_inner(co).0,
-                Err(payload) => match payload.downcast::<HandleDrop<()>>() {
-                    Ok(hd) => hd.0,
-                    Err(payload) => Co::into_inner(hook.rewind(payload)).0,
+            match unwind::catch_unwind(AssertUnwindSafe(run)) {
+                Ok(co) => Co::into_inner(co),
+                Err(payload) => match payload.downcast::<HandleDrop>() {
+                    Ok(hd) => (hd.cx, hd.raw),
+                    Err(payload) => Co::into_inner(hook.rewind(payload)),
                 },
             }
         };
         #[cfg(not(any(feature = "unwind", feature = "std")))]
-        let context = Co::into_inner(run()).0;
+        let (context, next) = Co::into_inner(run());
 
-        // SAFETY: The proof is the same as the one in `Co::resume`.
+        let old = super::CUR.replace(next.cast());
+        debug_assert_eq!(old, ptr);
+        // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
         unsafe { cx::resume_with(context, ptr, Self::exit) };
         unreachable!("Exiting failed. There's at least some dangling `Co` instance!")
     }
@@ -230,6 +240,7 @@ pub(super) unsafe extern "C" fn map<M: FnOnce(Co) -> (Option<Co>, *mut ())>(
     cx: NonNull<()>,
     ptr: *mut (),
 ) -> Transfer<()> {
+    // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
     let data = unsafe { TransferData::from_mut(ptr) };
     // SAFETY: The only reading is safe by contract.
     let func = unsafe { ptr.cast::<M>().read() };
@@ -241,6 +252,8 @@ pub(super) unsafe extern "C" fn map<M: FnOnce(Co) -> (Option<Co>, *mut ())>(
             data.payload = payload;
             cx
         }),
+        // We return the pointer to the same `TransferData`, thus guaranteeing its
+        // validity.
         data: ptr,
     }
 }
