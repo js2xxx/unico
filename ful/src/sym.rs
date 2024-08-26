@@ -151,6 +151,20 @@ impl<R: Resume> Co<R> {
         context.map(|context| Co::from_inner(context, rs))
     }
 
+    /// Similar to [`Co::resume`], but with a pointer payload.
+    ///
+    /// # Safety
+    ///
+    /// The validity of returned pointer is not guaranteed whether `payload` is
+    /// valid. The caller must maintains this manually, usually by calling this
+    /// function in pairs.
+    pub unsafe fn resume_with_payload(self, payload: *mut ()) -> Option<(Self, *mut ())> {
+        let (context, rs) = Co::into_inner(self);
+        // SAFETY: See `Co::resume` for more informaion.
+        let Transfer { context, data } = unsafe { rs.resume(context, payload) };
+        context.map(|context| (Co::from_inner(context, rs), data))
+    }
+
     /// Resume the unwinding for this coroutine's partial destruction process.
     /// Use it in the process of error handling for every `catch_unwind`.
     ///
