@@ -61,6 +61,7 @@ impl Stack {
 
 impl Drop for Stack {
     fn drop(&mut self) {
+        // SAFETY: See `Stack::new` for more information.
         unsafe { (self.drop)(self.pointer, self.layout) }
     }
 }

@@ -124,8 +124,8 @@ where
         // SAFETY: See the type's safety notice.
         let wrapper = move |co: Co<Z>| {
             // SAFETY: See step 1 of the type's safety notice.
-            let res = unsafe { co.resume_with_payload(ptr::null_mut()) };
-            let (co, payload) = res.unwrap();
+            let (res, payload) = unsafe { co.resume_payloaded(ptr::null_mut()) };
+            let co = res.unwrap();
 
             // SAFETY: See step 2 of the type's safety notice.
             let initial = unsafe { payload.cast::<R>().read() };
@@ -155,8 +155,8 @@ where
             let co = handle.inner.take().unwrap();
 
             // SAFETY: See step 4 of the type's safety notice.
-            let res = unsafe { co.resume_with_payload(y.as_mut_ptr().cast()) };
-            res.unwrap().0
+            let (res, _) = unsafe { co.resume_payloaded(y.as_mut_ptr().cast()) };
+            res.unwrap()
         };
 
         // SAFETY: We here constrain the function to be the same lifetime as the
@@ -178,8 +178,8 @@ impl<'a, C, Y, R, Z: Resume> Gn<'a, C, Y, R, Z> {
             .expect("coroutine resumed after completion");
 
         // SAFETY: See step 2 and 4 of the type's safety notice.
-        let res = unsafe { co.resume_with_payload(m.as_mut_ptr().cast()) };
-        let (co, payload) = res.unwrap();
+        let (res, payload) = unsafe { co.resume_payloaded(m.as_mut_ptr().cast()) };
+        let co = res.unwrap();
 
         // SAFETY: See step 3 of the type's safety notice.
         match unsafe { payload.cast::<Payload<Y>>().read() } {
@@ -213,9 +213,8 @@ impl<Y, R, Z: Resume> YieldHandle<Y, R, Z> {
 
         let co = self.inner.take().unwrap();
         // SAFETY: See step 3 of the type's safety notice.
-        let res = unsafe { co.resume_with_payload(y.as_mut_ptr().cast()) };
-        let (co, payload) = res.unwrap();
-        self.inner = Some(co);
+        let (res, payload) = unsafe { co.resume_payloaded(y.as_mut_ptr().cast()) };
+        self.inner = res;
 
         // SAFETY: See step 4 of the type's safety notice.
         unsafe { payload.cast::<R>().read() }
