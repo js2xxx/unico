@@ -10,7 +10,7 @@ use core::{
 
 use spin::Mutex;
 
-use super::{Scheduler, Switch, Task};
+use super::{Scheduler, SchedulerExt, Switch, Task};
 
 #[derive(Default, Debug)]
 enum State<M: Switch> {
@@ -61,10 +61,10 @@ impl<S: Scheduler> SchedContext<S> {
             let mut state = self.0.state.lock();
             match mem::take(&mut *state) {
                 State::Notified => break,
-                State::Empty => self.0.sched.schedule(move |task| {
-                    *state = State::Waiting(task);
-                    None
-                }),
+                State::Empty => {
+                    let f = move |task| *state = State::Waiting(task);
+                    self.0.sched.schedule(f)
+                }
                 State::Waiting(_) => unreachable!("cannot call `wait` on other tasks"),
             }
         }

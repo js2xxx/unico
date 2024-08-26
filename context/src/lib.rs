@@ -176,6 +176,12 @@ pub unsafe fn resume_with(cx: NonNull<()>, data: *mut (), map: Map<()>) -> Trans
     __rust_unico_context_resume_with(cx, data, map)
 }
 
+/// Define a global resumer so that those global functions (like [`resume`]) can
+/// be used in general.
+///
+/// This macro works just like `#[global_allocator]` attribute, except it only
+/// receives the path of the target static variable, while the actual definition
+/// can lie elsewhere.
 #[macro_export]
 #[allow_internal_unstable(allocator_api)]
 macro_rules! global_resumer {

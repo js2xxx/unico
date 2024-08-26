@@ -249,7 +249,7 @@ where
 
 /// # Safety
 ///
-/// `ptr` must offer a valid `M`.
+/// `ptr` must offer a valid `M` in `TransferData`.
 #[allow(improper_ctypes_definitions)]
 pub(super) unsafe extern "C" fn map<M: FnOnce(Co) -> (Option<Co>, *mut ())>(
     cx: NonNull<()>,
