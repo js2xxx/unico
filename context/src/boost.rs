@@ -1,11 +1,14 @@
-use core::{ffi::c_void, ptr::NonNull};
+use core::{mem, ptr::NonNull};
 
 use crate::{stack_top, Entry, Map, Resume};
+
+const CONTEXT_SIZE: usize = include!(concat!(env!("OUT_DIR"), "/context_size.txt"));
+const CONTEXT_LEN: usize = CONTEXT_SIZE / mem::size_of::<usize>();
 
 /// The `fcontext_t` wrapper type in [`Boost.Context`](https://github.com/boostorg/context/).
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct Fcx(NonNull<c_void>);
+pub struct Fcx(NonNull<[usize; CONTEXT_LEN]>);
 
 #[link(name = "boost_context")]
 extern "C" {
