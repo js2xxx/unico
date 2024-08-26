@@ -188,9 +188,10 @@ impl<'a, C, Y, R, Z: Resume> Gn<'a, C, Y, R, Z> {
                 CoroutineState::Yielded(yielded)
             }
             Payload::Complete(complete) => {
+                let complete = unsafe { complete.cast::<C>().read() };
                 let res = co.resume();
                 debug_assert!(res.is_none());
-                CoroutineState::Complete(unsafe { complete.cast::<C>().read() })
+                CoroutineState::Complete(complete)
             }
             #[cfg(any(feature = "unwind", feature = "std"))]
             Payload::Panicked(payload) => resume_unwind(payload),

@@ -2,6 +2,7 @@
 use alloc::boxed::Box;
 #[cfg(any(feature = "unwind", feature = "std"))]
 use core::any::Any;
+use core::ptr::NonNull;
 
 use unico_context::Resume;
 #[cfg(any(feature = "unwind", feature = "std"))]
@@ -12,7 +13,7 @@ use crate::{sym::Co, unwind};
 
 #[cfg(any(feature = "unwind", feature = "std"))]
 #[repr(transparent)]
-pub(in crate::sym) struct HandleDrop<C>(pub C);
+pub(in crate::sym) struct HandleDrop<C>(pub NonNull<C>);
 
 // SAFETY: If the actual context is not `Send`, then the coroutine will also not
 // be `Send`, thus, preventing sending the context to another thread and unwinds
@@ -23,7 +24,7 @@ unsafe impl<C> Send for HandleDrop<C> {}
 #[cfg(any(feature = "unwind", feature = "std"))]
 #[allow(improper_ctypes_definitions)]
 pub(in crate::sym) extern "C" fn unwind<R: Resume>(
-    cx: R::Context,
+    cx: NonNull<R::Context>,
     _: *mut (),
 ) -> Transfer<R::Context> {
     unwind::resume_unwind(Box::new(HandleDrop(cx)))
