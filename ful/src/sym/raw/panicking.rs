@@ -25,7 +25,7 @@ unsafe impl Send for HandleDrop {}
 
 #[cfg(any(feature = "unwind", feature = "std"))]
 #[allow(improper_ctypes_definitions)]
-pub(in crate::sym) extern "C" fn unwind(cx: NonNull<()>, raw: *mut ()) -> Transfer<()> {
+pub(in crate::sym) extern "C-unwind" fn unwind(cx: NonNull<()>, raw: *mut ()) -> Transfer<()> {
     unwind::resume_unwind(Box::new(HandleDrop {
         cx,
         raw: raw.cast(),
