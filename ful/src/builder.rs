@@ -172,7 +172,7 @@ impl<Z: Resume, S: Into<Stack>, P: PanicHook<Z>> Builder<Z, S, P> {
     /// This structure also implements [`core::ops::Coroutine`] trait.
     pub fn gen<'a, F, C, Y, R>(self, func: F) -> Result<Gn<'a, C, Y, R, Z>, NewError<Z>>
     where
-        F: FnOnce(&mut YieldHandle<'a, C, Y, R, Z>, R) -> C + Send + 'a,
+        F: FnOnce(&mut YieldHandle<Y, R, Z>, R) -> C + Send + 'a,
     {
         self.build(func)
     }
@@ -269,10 +269,10 @@ where
 /// Create a stackful generator, a.k.a. an asymmetric coroutine.
 ///
 /// This structure also implements [`core::ops::Coroutine`] trait.
-pub fn gen_on<'a, S, F, C, Y, R>(stack: S, func: F) -> Gn<'a, C, Y, R, Boost>
+pub fn gen_on<'a, S, F, C, Y, R>(stack: S, func: F) -> Gn<'a, C, Y, R>
 where
     S: Into<Stack>,
-    F: FnOnce(&mut YieldHandle<'a, C, Y, R, Boost>, R) -> C + Send + 'a,
+    F: FnOnce(&mut YieldHandle<Y, R>, R) -> C + Send + 'a,
 {
     Builder::new()
         .on(stack)
@@ -285,9 +285,9 @@ where
 ///
 /// This structure also implements [`core::ops::Coroutine`] trait.
 #[cfg(feature = "global-stack-allocator")]
-pub fn gen<'a, F, C, Y, R>(func: F) -> Gn<'a, C, Y, R, Boost>
+pub fn gen<'a, F, C, Y, R>(func: F) -> Gn<'a, C, Y, R>
 where
-    F: FnOnce(&mut YieldHandle<'a, C, Y, R, Boost>, R) -> C + Send + 'a,
+    F: FnOnce(&mut YieldHandle<Y, R>, R) -> C + Send + 'a,
 {
     gen_on(&Global, func)
 }
