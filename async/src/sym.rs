@@ -5,8 +5,6 @@
 //! don't have return values. Instead, users can have their own choice of a(n)
 //! sync/async channel that sends the result to somewhere.
 
-mod waker;
-
 use core::{
     future::Future,
     pin::pin,
@@ -19,7 +17,7 @@ use unico_ful::{
 };
 use unico_stack::Stack;
 
-pub use self::waker::{SchedWaker, Schedule, ScheduleInfo};
+use crate::waker::SchedWaker;
 
 /// A task that can be spawned in a scheduler.
 pub struct Task<M: Switch = ()> {

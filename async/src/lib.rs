@@ -1,6 +1,7 @@
 #![no_std]
 #![feature(coroutine_trait)]
 
+pub mod waker;
 #[cfg(feature = "asym")]
 pub mod asym;
 #[cfg(feature = "sym")]
