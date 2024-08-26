@@ -188,10 +188,10 @@ impl Co {
     /// The validity of returned pointer is not guaranteed whether `payload` is
     /// valid. The caller must maintains this manually, usually by calling this
     /// function in pairs.
-    pub unsafe fn resume_payloaded_with<M: FnOnce(Self) -> (Option<Self>, *mut ())>(
-        self,
-        map: M,
-    ) -> (Option<Self>, *mut ()) {
+    pub unsafe fn resume_payloaded_with<M>(self, map: M) -> (Option<Self>, *mut ())
+    where
+        M: FnOnce(Self) -> (Option<Self>, *mut ()),
+    {
         let cx = Co::into_inner(self);
 
         let mut data = ManuallyDrop::new(map);
@@ -204,22 +204,6 @@ impl Co {
         // SAFETY: `cx` is valid by contract.
         (context.map(|cx| unsafe { Co::from_inner(cx) }), data)
     }
-
-    /// Resume the unwinding for this coroutine's partial destruction process.
-    /// Use it in the process of error handling for every `catch_unwind`.
-    ///
-    /// Note that if you don't use it according to the text above, then the
-    /// destruction process will be aborted and the caller of that process
-    /// will not be returned and thus unreachable forever!
-    ///
-    /// This function is required due to the flaw in the unwinding
-    /// implementation of Rust standard library which immediately aborts
-    /// when encountering a foreign exception class code instead of
-    /// continuing the process.
-    #[cfg(any(feature = "unwind", feature = "std"))]
-    pub fn resume_unwind(&self, payload: Box<dyn Any + Send>) -> Box<dyn Any + Send> {
-        raw::resume_unwind(payload)
-    }
 }
 
 impl Drop for Co {
@@ -231,15 +215,45 @@ impl Drop for Co {
         unsafe {
             let cx = self.cx;
             #[cfg(any(feature = "unwind", feature = "std"))]
-            {
-                cx::resume_with(cx, ptr::null_mut(), raw::unwind);
-            }
+            cx::resume_with(cx, ptr::null_mut(), raw::unwind);
             #[cfg(not(any(feature = "unwind", feature = "std")))]
             unsafe {
                 ptr::drop_in_place(raw)
             };
         }
     }
+}
+
+/// Abort the current continuation and transfers the current control flow to
+/// `next`.
+///
+/// All the variables on the current call stack will be safely dropped if
+/// unwinding is enabled.
+///
+/// This is basically a shorthand for `next.resume_with(|_| None)`, but reduces
+/// some overhead if unwinding is enabled.
+pub fn exit(next: Co) -> ! {
+    #[cfg(any(feature = "unwind", feature = "std"))]
+    raw::unwind(Co::into_inner(next), ptr::null_mut());
+    #[cfg(not(any(feature = "unwind", feature = "std")))]
+    next.resume_with(|_| None);
+
+    unreachable!("Exiting failed. There's at least some dangling `Co` instance!")
+}
+
+/// Resume the unwinding for this coroutine's partial destruction process. Use
+/// it in the process of error handling for every `catch_unwind`.
+///
+/// Note that if you don't use it according to the text above, then the
+/// destruction process will be aborted and the caller of that process will not
+/// be returned and thus unreachable forever!
+///
+/// This function is required due to the flaw in the unwinding implementation of
+/// Rust standard library which immediately aborts when encountering a foreign
+/// exception class code instead of continuing the process.
+#[cfg(any(feature = "unwind", feature = "std"))]
+pub fn handle_exit(payload: Box<dyn Any + Send>) -> Box<dyn Any + Send> {
+    raw::resume_unwind(payload)
 }
 
 #[cfg(test)]
@@ -250,7 +264,7 @@ mod tests {
     use unico_context::{boost::Boost, global_resumer};
     use unico_stack::global_stack_allocator;
 
-    use crate::{callcc, spawn, spawn_unchecked};
+    use crate::{callcc, spawn, spawn_unchecked, sym::exit};
 
     global_stack_allocator!(Global);
     global_resumer!(Boost);
@@ -286,7 +300,7 @@ mod tests {
         let s = String::from("hello");
         let ret = callcc(move |co| {
             assert_eq!(s, "hello");
-            co
+            exit(co)
         });
         assert!(ret.is_none());
     }

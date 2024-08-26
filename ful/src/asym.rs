@@ -16,7 +16,7 @@ use unico_stack::{Global, Stack};
 #[cfg(any(feature = "unwind", feature = "std"))]
 use crate::unwind::*;
 use crate::{
-    sym::{AbortHook, Co, PanicHook},
+    sym::{handle_exit, AbortHook, Co, PanicHook},
     Build, BuildUnchecked, Builder, NewError,
 };
 
@@ -137,10 +137,7 @@ where
                     c = complete;
                     Payload::<Y>::Complete(ptr::from_ref(&c).cast())
                 }
-                Err(payload) => {
-                    let payload = handle.inner.as_ref().unwrap().resume_unwind(payload);
-                    Payload::Panicked(payload)
-                }
+                Err(payload) => Payload::Panicked(handle_exit(payload)),
             };
             #[cfg(not(any(feature = "unwind", feature = "std")))]
             let y = {

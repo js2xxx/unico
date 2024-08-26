@@ -54,7 +54,11 @@ impl<F, P: PanicHook> RawCo<F, P> {
     fn layouts() -> Layouts {
         match Self::LAYOUTS {
             Some(layouts) => layouts,
-            None => unreachable!("Layout evaluation failed for {}", type_name::<F>()),
+            None => unreachable!(
+                "Layout evaluation failed for {} and {}",
+                type_name::<F>(),
+                type_name::<P>(),
+            ),
         }
     }
 
