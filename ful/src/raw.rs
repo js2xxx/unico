@@ -1,25 +1,18 @@
+#[cfg(feature = "alloc")]
+use alloc::boxed::Box;
+#[cfg(feature = "alloc")]
+use core::any::Any;
 use core::{
     alloc::Layout,
-    intrinsics::{abort, atomic_cxchg_acqrel_acquire},
+    any::type_name,
     ptr::{self, NonNull},
-    sync::atomic::AtomicU8,
 };
 
 use unico_context::{Resume, Transfer};
+#[cfg(feature = "alloc")]
+use unwinding::panic;
 
 use crate::{layout::extend, Co, NewError, RawStack};
-
-/// The function hasn't been started.
-const INITIALIZED: u8 = 0;
-/// The function has yielded during its execution.
-const STARTED: u8 = 1;
-/// The function has been consumed.
-const FINISHED: u8 = 3;
-
-pub(crate) struct Header<R: Resume> {
-    state: AtomicU8,
-    rs: R,
-}
 
 struct Layouts {
     layout: Layout,
@@ -28,18 +21,18 @@ struct Layouts {
 }
 
 pub(crate) struct RawCo<F, R: Resume> {
-    header: *mut Header<R>,
+    rs: *mut R,
     func: *mut F,
     stack: *mut RawStack,
 }
 
 impl<F, R: Resume> RawCo<F, R> {
     const fn eval_layouts() -> Option<Layouts> {
-        let header = Layout::new::<Header<R>>();
+        let rs = Layout::new::<R>();
         let func = Layout::new::<F>();
         let stack = Layout::new::<RawStack>();
 
-        let layout = header;
+        let layout = rs;
         let (layout, offset_func) = ct!(extend(layout, func));
         let (layout, offset_stack) = ct!(extend(layout, stack));
         Some(Layouts {
@@ -54,22 +47,21 @@ impl<F, R: Resume> RawCo<F, R> {
     fn layouts() -> Layouts {
         match Self::LAYOUTS {
             Some(layouts) => layouts,
-            None => abort(),
+            None => unreachable!(
+                "Layout evaluation failed for {} and {}",
+                type_name::<R>(),
+                type_name::<F>()
+            ),
         }
     }
 
     fn from_ptr(ptr: *mut ()) -> Self {
         let layouts = Self::layouts();
         RawCo {
-            header: ptr.cast(),
+            rs: ptr.cast(),
             func: ptr.map_addr(|addr| addr + layouts.offset_func).cast(),
             stack: ptr.map_addr(|addr| addr + layouts.offset_stack).cast(),
         }
-    }
-
-    unsafe fn update_state(&self, old: u8, src: u8) -> bool {
-        let state = ptr::addr_of_mut!((*self.header).state);
-        atomic_cxchg_acqrel_acquire(state.cast(), old, src).1
     }
 }
 
@@ -115,10 +107,7 @@ where
 
         let raw = Self::from_ptr(pointer);
         unsafe {
-            raw.header.write(Header {
-                state: AtomicU8::new(INITIALIZED),
-                rs: rs.clone(),
-            });
+            raw.rs.write(rs.clone());
             raw.func.write(func);
             raw.stack.write(stack);
         }
@@ -136,26 +125,38 @@ where
     unsafe extern "C" fn entry(cx: R::Context, ptr: *mut ()) -> ! {
         let task = Self::from_ptr(ptr);
 
-        let rs = unsafe { (*task.header).rs.clone() };
-        let Transfer { context, .. } = unsafe { rs.resume(cx, ptr) };
+        let rs = unsafe { (*task.rs).clone() };
         unsafe {
-            if task.update_state(INITIALIZED, STARTED) {
-                let Co { context, .. } =
-                    (task.func.read())(context.map(|context| Co { context, rs }));
+            let run = || {
+                let Transfer { context, .. } = rs.resume(cx, ptr);
+                let co = context.map(|cx| Co::from_inner(cx, rs));
+                (task.func.read())(co)
+            };
 
-                task.update_state(STARTED, FINISHED);
+            #[cfg(feature = "alloc")]
+            let context = {
+                let result = panic::catch_unwind(run);
+                match result {
+                    Ok(co) => Co::into_inner(co).0,
+                    Err(payload) => {
+                        let hd: HandleDrop<R::Context> = *payload.downcast().unwrap();
+                        hd.0
+                    }
+                }
+            };
+            #[cfg(not(feature = "alloc"))]
+            let context = Co::into_inner(run()).0;
 
-                (*task.header).rs.resume_with(context, ptr, Self::exit);
-            }
+            (*task.rs).resume_with(context, ptr, Self::exit);
         }
-        abort()
+        unreachable!("Exiting failed. There's at least some dangling `Co` instance!")
     }
 
     #[allow(improper_ctypes_definitions)]
     unsafe extern "C" fn exit(_: R::Context, ptr: *mut ()) -> Transfer<R::Context> {
         let task = Self::from_ptr(ptr);
         unsafe {
-            ptr::drop_in_place(ptr::addr_of_mut!((*task.header).rs));
+            ptr::drop_in_place(task.rs);
             drop(task.stack.read())
         }
         Transfer {
@@ -165,15 +166,48 @@ where
     }
 }
 
+#[cfg(feature = "alloc")]
+mod panicking {
+    use super::*;
+    #[repr(transparent)]
+    pub(crate) struct HandleDrop<C>(pub C);
+
+    unsafe impl<C> Send for HandleDrop<C> {}
+
+    #[allow(improper_ctypes_definitions)]
+    pub(crate) unsafe extern "C" fn unwind<R: Resume>(
+        cx: R::Context,
+        _: *mut (),
+    ) -> Transfer<R::Context> {
+        panic::begin_panic(Box::new(HandleDrop(cx)));
+        unreachable!("Unwind erroneously returned.")
+    }
+
+    pub(crate) fn resume_unwind<R: Resume>(
+        _: &Co<R>,
+        payload: Box<dyn Any + Send>,
+    ) -> Box<dyn Any + Send> {
+        match payload.downcast::<HandleDrop<R::Context>>() {
+            Ok(data) => {
+                panic::begin_panic(data);
+                unreachable!("Unwind erroneously returned.")
+            }
+            Err(p) => p,
+        }
+    }
+}
+#[cfg(feature = "alloc")]
+pub(crate) use panicking::*;
+
 #[allow(improper_ctypes_definitions)]
 pub(crate) unsafe extern "C" fn map<R: Resume, M: FnOnce(Co<R>) -> Option<Co<R>>>(
     cx: R::Context,
     ptr: *mut (),
 ) -> Transfer<R::Context> {
     let (rs, func) = unsafe { ptr.cast::<(R, M)>().read() };
-    let ret = func(Co { context: cx, rs });
+    let ret = func(Co::from_inner(cx, rs));
     Transfer {
-        context: ret.map(|Co { context, .. }| context),
+        context: ret.map(|co| Co::into_inner(co).0),
         data: ptr::null_mut(),
     }
 }

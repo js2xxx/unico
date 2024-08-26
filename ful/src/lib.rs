@@ -1,7 +1,6 @@
 #![no_std]
 #![feature(alloc_layout_extra)]
 #![feature(const_alloc_layout)]
-#![feature(core_intrinsics)]
 #![feature(strict_provenance)]
 
 macro_rules! ct {
@@ -17,14 +16,25 @@ mod layout;
 mod raw;
 pub mod stack;
 
-use core::{alloc::Layout, mem::ManuallyDrop, ptr};
+#[cfg(feature = "alloc")]
+use alloc::boxed::Box;
+#[cfg(feature = "alloc")]
+use core::any::Any;
+use core::{
+    alloc::Layout,
+    mem::{self, ManuallyDrop},
+    ptr,
+};
 
 use unico_context::{Resume, Transfer};
 
 use crate::{raw::RawCo, stack::RawStack};
 
-#[cfg(test)]
+#[cfg(feature = "alloc")]
 extern crate alloc;
+
+#[cfg(test)]
+extern crate std;
 
 #[derive(Debug)]
 pub enum NewError<R: Resume> {
@@ -36,10 +46,33 @@ pub enum NewError<R: Resume> {
 ///
 /// This structure represents a continuation, a.k.a. the handle of a symmetric
 /// coroutine.
+///
+/// Note that if `alloc` feature is not enabled and the coroutine is dropped
+/// while not resumed to end, the stack allocation and context resumer will be
+/// ***LEAKED***. It's because the dropping process requires unwinding, and thus
+/// a `Box<dyn Any + Send>`.
 #[derive(Debug)]
 pub struct Co<R: Resume> {
-    context: R::Context,
-    rs: R,
+    context: ManuallyDrop<R::Context>,
+    rs: ManuallyDrop<R>,
+}
+
+impl<R: Resume> Co<R> {
+    fn from_inner(context: R::Context, rs: R) -> Self {
+        Co {
+            context: ManuallyDrop::new(context),
+            rs: ManuallyDrop::new(rs),
+        }
+    }
+
+    fn into_inner(mut this: Self) -> (R::Context, R) {
+        unsafe {
+            let context = ManuallyDrop::take(&mut this.context);
+            let rs = ManuallyDrop::take(&mut this.rs);
+            mem::forget(this);
+            (context, rs)
+        }
+    }
 }
 
 impl<R: Resume> Co<R> {
@@ -48,7 +81,7 @@ impl<R: Resume> Co<R> {
         rs: R,
         func: impl FnOnce(Option<Self>) -> Self,
     ) -> Result<Self, NewError<R>> {
-        RawCo::new_on(stack, &rs, func).map(|context| Co { context, rs })
+        RawCo::new_on(stack, &rs, func).map(|context| Co::from_inner(context, rs))
     }
 
     /// Move the current control flow to this continuation.
@@ -57,7 +90,7 @@ impl<R: Resume> Co<R> {
     /// alongside with this object's ownership. Note that the return value may
     /// not be the same [`Co`] as the callee because this method is symmetric.
     pub fn resume(self) -> Option<Self> {
-        let Co { context, rs } = self;
+        let (context, rs) = Co::into_inner(self);
         // SAFETY: `context`'s lifetime is bound to its own coroutine, and it is ALWAYS
         // THE UNIQUE REFERENCE to the runtime stack. The proof is divided into 2
         // points:
@@ -93,7 +126,7 @@ impl<R: Resume> Co<R> {
         // actually proves to be true.
         let Transfer { context, .. } = unsafe { rs.resume(context, ptr::null_mut()) };
 
-        context.map(|context| Co { context, rs })
+        context.map(|context| Co::from_inner(context, rs))
     }
 
     /// Similar to [`Co::resume`], but maps the source of this continuation,
@@ -103,7 +136,7 @@ impl<R: Resume> Co<R> {
     /// call stack of that continuation. The only argument of `map` is the
     /// current control flow calling this method.
     pub fn resume_with<M: FnOnce(Self) -> Option<Self>>(self, map: M) -> Option<Self> {
-        let Co { context, rs } = self;
+        let (context, rs) = Co::into_inner(self);
 
         let mut data = ManuallyDrop::new((rs.clone(), map));
         let ptr = (&mut data as *mut ManuallyDrop<(R, M)>).cast();
@@ -111,14 +144,37 @@ impl<R: Resume> Co<R> {
         let Transfer { context, .. } =
             unsafe { rs.resume_with(context, ptr, raw::map::<R, M>) };
 
-        context.map(|context| Co { context, rs })
+        context.map(|context| Co::from_inner(context, rs))
+    }
+
+    /// Resume the unwinding for this coroutine's partial destruction. Use it in
+    /// the process of error handling for some `catch_unwind`.
+    ///
+    /// Note that if you don't use it according to the text above, then the
+    /// destruction process will be aborted and the caller of that process
+    /// will not be returned and thus unreachable forever!
+    #[cfg(feature = "alloc")]
+    pub fn resume_unwind(&self, payload: Box<dyn Any + Send>) -> Box<dyn Any + Send> {
+        raw::resume_unwind(self, payload)
+    }
+}
+
+impl<R: Resume> Drop for Co<R> {
+    fn drop(&mut self) {
+        #[allow(unused_variables)]
+        unsafe {
+            let cx = ManuallyDrop::take(&mut self.context);
+            let rs = ManuallyDrop::take(&mut self.rs);
+            #[cfg(feature = "alloc")]
+            rs.resume_with(cx, ptr::null_mut(), raw::unwind::<R>);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use core::ptr::NonNull;
-    use alloc::alloc::{alloc, dealloc};
+    use std::alloc::{alloc, dealloc};
 
     use unico_context::boost::Boost;
 
@@ -126,13 +182,15 @@ mod tests {
 
     fn raw_stack() -> RawStack {
         #[repr(align(4096))]
-        struct Stack([u8; 4096]);
+        struct Stack([u8; 6144]);
 
         // UNSAFE: `memory` and `drop` are valid.
         unsafe {
             let layout = Layout::new::<Stack>();
             let memory = alloc(layout);
+            std::println!("alloc {memory:p}");
             RawStack::new(NonNull::new_unchecked(memory), layout, |ptr, layout| {
+                std::println!("dealloc {ptr:p}");
                 dealloc(ptr.as_ptr(), layout)
             })
         }
