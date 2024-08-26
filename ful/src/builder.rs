@@ -12,6 +12,15 @@ pub struct Builder<S, P> {
     pub panic_hook: P,
 }
 
+impl Default for Builder<(), AbortHook> {
+    fn default() -> Self {
+        Builder {
+            stack: (),
+            panic_hook: AbortHook,
+        }
+    }
+}
+
 /// Build a stackful-coroutine-type object from the builder.
 pub trait Build<F, S, P>: BuildUnchecked<F, S, P> {
     /// Build a stackful-coroutine-type object from the builder.

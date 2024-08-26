@@ -72,6 +72,12 @@ impl Default for Stack {
     }
 }
 
+impl From<()> for Stack {
+    fn from(_: ()) -> Self {
+        Self::default()
+    }
+}
+
 impl From<Layout> for Stack {
     fn from(layout: Layout) -> Self {
         Self::from((&Global, layout))
