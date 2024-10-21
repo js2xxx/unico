@@ -6,6 +6,7 @@ use core::{
     marker::PhantomData,
     ops::CoroutineState,
     pin::Pin,
+    ptr::NonNull,
     task::{Context, Poll, Waker},
 };
 
@@ -19,15 +20,15 @@ use unico_stack::Stack;
 /// A [`Future`] based on a stackful generator.
 ///
 /// This structure cannot be created directly. [`sync`] should be used instead.
-pub struct Asym<'a, T>(Gn<'a, T, (), Waker>);
+pub struct Asym<'a, T>(Gn<'a, T, (), NonNull<Waker>>);
 
 /// The context of the execution of the current [`Asym`].
 ///
 /// This structure is dual to [`Context`] in futures. Users should pass a
 /// mutable reference of this struct to [`AsymWait::wait`].
 pub struct AsymContext<'y> {
-    y: &'y mut YieldHandle<(), Waker>,
-    waker: Waker,
+    y: &'y mut YieldHandle<(), NonNull<Waker>>,
+    waker: NonNull<Waker>,
 }
 
 impl<'a, F, T, S, P> Build<F, S, P> for Asym<'a, T>
@@ -42,7 +43,7 @@ where
     }
 }
 
-impl<'a, F, T, S, P> BuildUnchecked<F, S, P> for Asym<'a, T>
+impl<F, T, S, P> BuildUnchecked<F, S, P> for Asym<'_, T>
 where
     F: FnOnce(AsymContext<'_>) -> T,
     S: Into<Stack>,
@@ -64,11 +65,11 @@ where
     }
 }
 
-impl<'a, T> Future for Asym<'a, T> {
+impl<T> Future for Asym<'_, T> {
     type Output = T;
 
     fn poll<'x, 'y>(mut self: Pin<&'x mut Self>, cx: &mut Context<'y>) -> Poll<T> {
-        match self.0.resume(cx.waker().clone()) {
+        match self.0.resume(cx.waker().into()) {
             CoroutineState::Yielded(()) => Poll::Pending,
             CoroutineState::Complete(output) => Poll::Ready(output),
         }
@@ -83,7 +84,8 @@ pub trait AsymWait: IntoFuture + Sized {
     {
         let mut future = core::pin::pin!(self.into_future());
         loop {
-            let mut ac = Context::from_waker(&cx.waker);
+            // SAFETY: `cx.waker` remains valid until `cx.y.yield_()`.
+            let mut ac = Context::from_waker(unsafe { cx.waker.as_ref() });
             match future.as_mut().poll(&mut ac) {
                 Poll::Ready(output) => break output,
                 Poll::Pending => cx.waker = cx.y.yield_(()),
@@ -99,12 +101,19 @@ pub fn sync<'a, T, F>(func: F) -> AsymBuilder<'a, T, F>
 where
     F: FnOnce(AsymContext<'_>) -> T + Send + 'a,
 {
-    AsymBuilder(func, PhantomData)
+    AsymBuilder {
+        func,
+        marker: PhantomData,
+    }
 }
 
-pub struct AsymBuilder<'a, T, F>(F, PhantomData<&'a ()>)
+pub struct AsymBuilder<'a, T, F>
 where
-    F: FnOnce(AsymContext<'_>) -> T + Send + 'a;
+    F: FnOnce(AsymContext<'_>) -> T + Send + 'a,
+{
+    func: F,
+    marker: PhantomData<&'a ()>,
+}
 
 impl<'a, T, F: FnOnce(AsymContext<'_>) -> T + Send> IntoFuture for AsymBuilder<'a, T, F> {
     type Output = T;
@@ -113,7 +122,7 @@ impl<'a, T, F: FnOnce(AsymContext<'_>) -> T + Send> IntoFuture for AsymBuilder<'
 
     fn into_future(self) -> Self::IntoFuture {
         Builder::new()
-            .build(self.0)
+            .build(self.func)
             .expect("failed to build a stackful future")
     }
 }

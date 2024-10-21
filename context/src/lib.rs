@@ -200,11 +200,13 @@ macro_rules! global_resumer {
             stack_size: usize,
             entry: $crate::Entry<()>,
         ) -> Result<core::ptr::NonNull<()>, core::alloc::AllocError> {
-            $crate::Resume::new_on(
-                &$t,
-                core::ptr::NonNull::slice_from_raw_parts(stack, stack_size),
-                core::mem::transmute(entry),
-            )
+            unsafe {
+                $crate::Resume::new_on(
+                    &$t,
+                    core::ptr::NonNull::slice_from_raw_parts(stack, stack_size),
+                    core::mem::transmute(entry),
+                )
+            }
             .map(core::ptr::NonNull::cast)
             .map_err(|_| core::alloc::AllocError)
         }
@@ -215,8 +217,10 @@ macro_rules! global_resumer {
             cx: core::ptr::NonNull<()>,
             data: *mut (),
         ) -> $crate::Transfer<()> {
-            let t = $crate::Resume::resume(&$t, core::ptr::NonNull::cast(cx), data);
-            core::mem::transmute(t)
+            unsafe {
+                let t = $crate::Resume::resume(&$t, core::ptr::NonNull::cast(cx), data);
+                core::mem::transmute(t)
+            }
         }
 
         #[no_mangle]
@@ -226,12 +230,14 @@ macro_rules! global_resumer {
             data: *mut (),
             map: $crate::Map<()>,
         ) -> $crate::Transfer<()> {
-            core::mem::transmute($crate::Resume::resume_with(
-                &$t,
-                core::ptr::NonNull::cast(cx),
-                data,
-                core::mem::transmute(map),
-            ))
+            unsafe {
+                core::mem::transmute($crate::Resume::resume_with(
+                    &$t,
+                    core::ptr::NonNull::cast(cx),
+                    data,
+                    core::mem::transmute(map),
+                ))
+            }
         }
     };
 }

@@ -101,7 +101,7 @@ where
     }
 }
 
-impl<'a, F, C, Y, R, S, P> BuildUnchecked<F, S, P> for Gn<'a, C, Y, R>
+impl<F, C, Y, R, S, P> BuildUnchecked<F, S, P> for Gn<'_, C, Y, R>
 where
     F: FnOnce(&mut YieldHandle<Y, R>, R) -> C,
     S: Into<Stack>,
@@ -163,12 +163,9 @@ where
     }
 }
 
-impl<'a, C, Y, R> Gn<'a, C, Y, R> {
+impl<C, Y, R> Gn<'_, C, Y, R> {
     pub fn resume(&mut self, resumed: R) -> CoroutineState<Y, C> {
-        let co = self
-            .inner
-            .take()
-            .expect("coroutine resumed after completion");
+        let co = (self.inner.take()).expect("coroutine resumed after completion");
         let mut m = MaybeUninit::new(resumed);
 
         // SAFETY: See step 2 and 4 of the type's safety notice.
