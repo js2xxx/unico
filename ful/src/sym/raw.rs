@@ -86,6 +86,27 @@ where
         panic_hook: P,
         func: F,
     ) -> Result<Co, NewError> {
+        Self::new_on_imp(stack, panic_hook, func, Self::entry::<false>)
+            .map(Option::unwrap)
+    }
+
+    pub(crate) unsafe fn callcc_on(
+        stack: Stack,
+        panic_hook: P,
+        func: F,
+    ) -> Result<Option<Co>, NewError> {
+        Self::new_on_imp(stack, panic_hook, func, Self::entry::<true>)
+    }
+
+    /// # Safety
+    ///
+    /// - See `super::Builder::spawn_unchecked` for more information.
+    pub(crate) unsafe fn new_on_imp(
+        stack: Stack,
+        panic_hook: P,
+        func: F,
+        entry: cx::Entry<()>,
+    ) -> Result<Option<Co>, NewError> {
         let layouts = Self::layouts();
         let stack_layout = stack.layout();
         if stack_layout.size() <= layouts.layout.size()
@@ -112,7 +133,7 @@ where
         // `Stack::new`.
         let context = unsafe {
             let ptr = NonNull::slice_from_raw_parts(stack.base(), rest_size);
-            cx::new_on(ptr, Self::entry)
+            cx::new_on(ptr, entry)
         }
         .map_err(NewError::Context)?;
 
@@ -128,7 +149,7 @@ where
         // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
         let resume = unsafe { cx::resume(context, pointer) };
         // SAFETY: `context` is valid by contract.
-        Ok(unsafe { Co::from_inner(resume.context.unwrap()) })
+        Ok(resume.context.map(|cx| unsafe { Co::from_inner(cx) }))
     }
 }
 
@@ -141,7 +162,7 @@ where
     /// # Safety
     ///
     /// `ptr` must points to a valid `RawCo` calculated from `RawCo::from_ptr`.
-    unsafe extern "C" fn entry(cx: NonNull<()>, ptr: *mut ()) -> ! {
+    unsafe extern "C" fn entry<const CALLCC: bool>(cx: NonNull<()>, ptr: *mut ()) -> ! {
         let task = Self::from_ptr(ptr);
 
         // SAFETY: The task is valid by contract.
@@ -152,10 +173,15 @@ where
         let func = unsafe { task.func.read() };
 
         let run = || {
-            // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
-            let Transfer { context, .. } = unsafe { cx::resume(cx, ptr) };
-            // SAFETY: `cx` is valid by contract.
-            func(context.map(|cx| unsafe { Co::from_inner(cx) }))
+            func(if CALLCC {
+                // SAFETY: `cx` is valid by contract.
+                Some(unsafe { Co::from_inner(cx) })
+            } else {
+                // SAFETY: The proof is the same as the one in `Co::resume_payloaded`.
+                let Transfer { context, .. } = unsafe { cx::resume(cx, ptr) };
+                // SAFETY: `cx` is valid by contract.
+                context.map(|cx| unsafe { Co::from_inner(cx) })
+            })
         };
 
         #[cfg(any(feature = "unwind", feature = "std"))]
@@ -163,13 +189,13 @@ where
             // Move the hook in the braces to make sure it drops when the control flow
             // goes out of the scope.
             let rewind = |payload| AssertUnwindSafe(|| hook.rewind(payload));
-            let run = || {
+            Co::into_inner('run: {
                 // Run the main function and catches its panic (or unwound `HandleDrop`)
                 // if possible.
                 let payload = match unwind::catch_unwind(AssertUnwindSafe(run)) {
-                    Ok(co) => return Co::into_inner(co),
+                    Ok(co) => break 'run co,
                     Err(payload) => match payload.downcast::<HandleDrop>() {
-                        Ok(hd) => return hd.cx,
+                        Ok(hd) => break 'run hd.next,
                         Err(payload) => payload,
                     },
                 };
@@ -177,14 +203,13 @@ where
                 // possible unwound `HandleDrop`. If another unexpected panic is caught,
                 // abort the current control flow.
                 match unwind::catch_unwind(rewind(payload)) {
-                    Ok(co) => Co::into_inner(co),
+                    Ok(co) => co,
                     Err(payload) => match payload.downcast::<HandleDrop>() {
-                        Ok(hd) => hd.cx,
-                        Err(payload) => Co::into_inner(AbortHook.rewind(payload)),
+                        Ok(hd) => hd.next,
+                        Err(payload) => AbortHook.rewind(payload),
                     },
                 }
-            };
-            run()
+            })
         };
         #[cfg(not(any(feature = "unwind", feature = "std")))]
         let (context, next) = Co::into_inner(run());
@@ -290,7 +315,7 @@ pub unsafe fn enter_root<R>(f: impl FnOnce() -> R + UnwindSafe) -> R {
             Ok(data) => {
                 // SAFETY: The `cx` is valid while the root control flow should be aborted
                 // immediately.
-                unsafe { cx::resume(data.cx, ptr::null_mut()) };
+                unsafe { cx::resume(Co::into_inner(data.next), ptr::null_mut()) };
                 unreachable!("Failed to drop the root `Co`")
             }
             Err(payload) => unwind::resume_unwind(payload),

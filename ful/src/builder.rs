@@ -134,7 +134,8 @@ impl<S: Into<Stack>, P: PanicHook> Builder<S, P> {
     where
         F: FnOnce(Co) -> Co + Send + 'static,
     {
-        self.spawn(|co| func(co.unwrap())).map(Co::resume)
+        // SAFETY: The contract is the same.
+        unsafe { self.callcc_unchecked(func) }
     }
 
     /// Like [`Builder::callcc`], but leave some checks on the function to the
@@ -151,7 +152,7 @@ impl<S: Into<Stack>, P: PanicHook> Builder<S, P> {
         F: FnOnce(Co) -> Co,
     {
         // SAFETY: The contract is the same.
-        unsafe { self.spawn_unchecked(|co| func(co.unwrap())) }.map(Co::resume)
+        unsafe { Co::callcc_unchecked(func, self.stack, self.panic_hook) }
     }
 
     /// Create a stackful generator, a.k.a. an asymmetric coroutine.
@@ -232,7 +233,7 @@ pub fn callcc<F>(func: F) -> Option<Co>
 where
     F: FnOnce(Co) -> Co + Send + 'static,
 {
-    spawn(|co| func(co.unwrap())).resume()
+    callcc_on(&Global, func)
 }
 
 /// Like [`callcc`], but leave some checks on the function to the caller.
@@ -248,7 +249,40 @@ where
     F: FnOnce(Co) -> Co,
 {
     // SAFETY: The contract is the same.
-    unsafe { spawn_unchecked(|co| func(co.unwrap())) }.resume()
+    unsafe { callcc_unchecked_on(&Global, func) }
+}
+
+/// Call the target function with current continuation on a specific stack.
+///
+/// This function creates a symmetric stackful coroutine and immediately resume
+/// it once.
+pub fn callcc_on<S, F>(stack: S, func: F) -> Option<Co>
+where
+    S: Into<Stack>,
+    F: FnOnce(Co) -> Co + Send + 'static,
+{
+    Builder::new()
+        .on(stack)
+        .callcc(func)
+        .expect("failed to call/cc")
+}
+
+/// Like [`callcc_on`], but leave some checks on the function to the caller.
+///
+/// # Safety
+///
+/// - `func` must be [`Send`], or the caller must not send the coroutine to
+///   another thread.
+/// - `func` must be `'static`, or the caller must ensure that the returned
+///   [`Co`] not escape the lifetime of the function.
+pub unsafe fn callcc_unchecked_on<S, F>(stack: S, func: F) -> Option<Co>
+where
+    S: Into<Stack>,
+    F: FnOnce(Co) -> Co,
+{
+    let builder = Builder::new().on(stack);
+    // SAFETY: The contract is the same.
+    unsafe { builder.callcc_unchecked(func) }.expect("failed to call/cc")
 }
 
 /// Create a stackful generator, a.k.a. an asymmetric coroutine.

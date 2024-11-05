@@ -12,7 +12,7 @@ use crate::{sym::Co, unwind};
 
 #[cfg(any(feature = "unwind", feature = "std"))]
 pub(in crate::sym) struct HandleDrop {
-    pub cx: NonNull<()>,
+    pub next: Co,
 }
 
 // SAFETY: If the actual context is not `Send`, then the coroutine will also not
@@ -27,7 +27,9 @@ pub(in crate::sym) extern "C-unwind" fn unwind(
     cx: NonNull<()>,
     _: *mut (),
 ) -> Transfer<()> {
-    unwind::resume_unwind(Box::new(HandleDrop { cx }))
+    unwind::resume_unwind(Box::new(HandleDrop {
+        next: unsafe { Co::from_inner(cx) },
+    }))
 }
 
 #[cfg(any(feature = "unwind", feature = "std"))]
@@ -68,11 +70,11 @@ impl PanicHook for AbortHook {
     }
 }
 
-#[cfg(any(feature = "unwind", feature = "std"))]
 impl<T> PanicHook for T
 where
     T: FnOnce(Box<dyn Any + Send>) -> Co,
 {
+    #[cfg(any(feature = "unwind", feature = "std"))]
     fn rewind(self, payload: Box<dyn Any + Send>) -> Co {
         self(payload)
     }

@@ -98,6 +98,27 @@ where
 }
 
 impl Co {
+    /// # Safety
+    ///
+    /// - `func` must be [`Send`], or the caller must not send the coroutine to
+    ///   another thread.
+    /// - `arg` must be `'static`, or the caller must ensure that the returned
+    ///   [`Co`] not escape the lifetime of the function.
+    pub(crate) unsafe fn callcc_unchecked<F, S, P>(
+        func: F,
+        stack: S,
+        panic_hook: P,
+    ) -> Result<Option<Self>, NewError>
+    where
+        F: FnOnce(Co) -> Co,
+        S: Into<Stack>,
+        P: PanicHook,
+    {
+        let func = |opt: Option<Co>| func(opt.unwrap());
+        // SAFETY: The contract is the same.
+        unsafe { raw::RawCo::callcc_on(stack.into(), panic_hook, func) }
+    }
+
     /// Transfers the current control flow to this continuation.
     ///
     /// This method moves the current control flow to this continuation,
