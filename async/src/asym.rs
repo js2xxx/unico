@@ -145,10 +145,9 @@ impl<'a, T, F: FnOnce(AsymContext<'_>) -> T + Send> IntoFuture for AsymBuilder<'
 
 /// Turns a block of sync code into a future.
 #[cfg(feature = "std")]
-pub fn sync<'a, T: 'a, F>(func: F) -> impl IntoFuture<Output = T> + 'a
-where
-    F: FnOnce() -> T + Send + 'a,
-{
+pub fn sync<'a, T: 'a>(
+    func: impl FnOnce() -> T + Send + 'a,
+) -> AsymBuilder<'a, T, impl FnOnce(AsymContext<'_>) -> T> {
     sync_with(|cx| {
         // SAFETY: `cx` will be unset when the closure goes out of scope.
         let cx =
@@ -187,46 +186,31 @@ mod block_on {
     use std::{sync::Arc, task::Wake, thread, thread_local};
 
     pub fn block_on<T>(mut future: Pin<&mut impl Future<Output = T>>) -> T {
-        fn waker() -> Waker {
-            struct WakerFn<F>(F);
+        struct WakerFn<F>(F);
 
-            impl<F: Fn() + Send + Sync + 'static> Wake for WakerFn<F> {
-                fn wake(self: Arc<Self>) {
-                    (self.0)();
-                }
-
-                fn wake_by_ref(self: &Arc<Self>) {
-                    (self.0)();
-                }
+        impl<F: Fn() + Send + Sync + 'static> Wake for WakerFn<F> {
+            fn wake(self: Arc<Self>) {
+                (self.0)();
             }
 
-            let thread = thread::current();
-            Arc::new(WakerFn(move || thread.unpark())).into()
+            fn wake_by_ref(self: &Arc<Self>) {
+                (self.0)();
+            }
         }
 
         thread_local! {
             // Cached waker for efficiency.
-            static CACHE: RefCell<Waker> = RefCell::new(waker());
+            static CACHE: RefCell<Waker> = RefCell::new({
+                let thread = thread::current();
+                Arc::new(WakerFn(move || thread.unpark())).into()
+            });
         }
 
-        CACHE.with(|cache| {
-            // Try grabbing the cached waker.
-            let tmp_cached;
-            let tmp_fresh;
-            let waker = match cache.try_borrow_mut() {
-                Ok(cache) => {
-                    // Use the cached waker.
-                    tmp_cached = cache;
-                    &*tmp_cached
-                }
-                Err(_) => {
-                    // Looks like this is a recursive `block_on()` call.
-                    // Create a fresh waker.
-                    tmp_fresh = waker();
-                    &tmp_fresh
-                }
-            };
-
+        // Grab the cached waker.
+        //
+        // This function won't be called nestedly, so we don't need to
+        // `try_borrow_mut`.
+        CACHE.with_borrow_mut(|waker| {
             let cx = &mut Context::from_waker(waker);
             // Keep polling until the future is ready.
             loop {

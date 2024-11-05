@@ -9,8 +9,6 @@
 #![feature(const_alloc_layout)]
 #![feature(coroutine_trait)]
 #![feature(coroutines)]
-#![feature(strict_provenance)]
-#![feature(thread_local)]
 
 macro_rules! ct {
     ($e:expr) => {

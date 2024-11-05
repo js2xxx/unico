@@ -15,5 +15,5 @@ pub mod sym;
 #[cfg(feature = "sym")]
 extern crate alloc;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "std"))]
 extern crate std;

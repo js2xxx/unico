@@ -19,4 +19,4 @@ pub mod asym {
     pub use unico_ful::asym::*;
 }
 #[cfg(feature = "asym")]
-pub use unico_ful::{r#gen, gen_on};
+pub use unico_ful::{gen_on, r#gen};

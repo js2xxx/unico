@@ -18,6 +18,11 @@ unico-context = {path = "context", default-features = false}
 unico-ful = {path = "ful", default-features = false}
 unico-stack = {path = "stack", default-features = false}
 
+[dev-dependencies]
+futures-lite = "2.4"
+spin_on = "0.1"
+time = "0.3"
+
 [workspace]
 members = [
   "async",

@@ -111,10 +111,8 @@ where
         // SAFETY: The pointer in `stack` is valid according to its constructor
         // `Stack::new`.
         let context = unsafe {
-            cx::new_on(
-                NonNull::slice_from_raw_parts(stack.base(), rest_size),
-                Self::entry,
-            )
+            let ptr = NonNull::slice_from_raw_parts(stack.base(), rest_size);
+            cx::new_on(ptr, Self::entry)
         }
         .map_err(NewError::Context)?;
 
