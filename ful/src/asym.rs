@@ -16,7 +16,7 @@ use unico_stack::{Global, Stack};
 #[cfg(any(feature = "unwind", feature = "std"))]
 use crate::unwind::*;
 use crate::{
-    sym::{handle_exit, AbortHook, Co, PanicHook},
+    sym::{AbortHook, Co, PanicHook},
     Build, BuildUnchecked, Builder, NewError,
 };
 
