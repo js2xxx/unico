@@ -137,7 +137,10 @@ where
                     c = complete;
                     Payload::<Y>::Complete(ptr::from_ref(&c).cast())
                 }
-                Err(payload) => Payload::Panicked(handle_exit(payload)),
+                // `handle_exit` is not allowed here because the caller of this coroutine
+                // must receive the yielding result but `handle_exit` bypass the
+                // assignment.
+                Err(payload) => Payload::Panicked(payload),
             };
             #[cfg(not(any(feature = "unwind", feature = "std")))]
             let y = {
