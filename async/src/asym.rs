@@ -7,7 +7,7 @@ use core::{
     ops::CoroutineState,
     pin::Pin,
     ptr::NonNull,
-    task::{Context, Poll, Waker},
+    task::{Context, Poll},
 };
 
 use unico_ful::{
@@ -20,15 +20,15 @@ use unico_stack::Stack;
 /// A [`Future`] based on a stackful generator.
 ///
 /// This structure cannot be created directly. [`sync`] should be used instead.
-pub struct Asym<'a, T>(Gn<'a, T, (), NonNull<Waker>>);
+pub struct Asym<'a, T>(Gn<'a, T, (), NonNull<Context<'static>>>);
 
 /// The context of the execution of the current [`Asym`].
 ///
 /// This structure is dual to [`Context`] in futures. Users should pass a
 /// mutable reference of this struct to [`AsymWait::wait`].
 pub struct AsymContext<'y> {
-    y: &'y mut YieldHandle<(), NonNull<Waker>>,
-    waker: NonNull<Waker>,
+    y: &'y mut YieldHandle<(), NonNull<Context<'static>>>,
+    task_cx: NonNull<Context<'static>>,
 }
 
 impl<'a, F, T, S, P> Build<F, S, P> for Asym<'a, T>
@@ -60,7 +60,7 @@ where
     ) -> Result<Self, Self::Error> {
         // SAFETY: The contract is the same.
         Ok(Asym(unsafe {
-            Gn::build_unchecked(builder, |y, waker| arg(AsymContext { y, waker }))?
+            Gn::build_unchecked(builder, |y, task_cx| arg(AsymContext { y, task_cx }))?
         }))
     }
 }
@@ -69,7 +69,7 @@ impl<T> Future for Asym<'_, T> {
     type Output = T;
 
     fn poll<'x, 'y>(mut self: Pin<&'x mut Self>, cx: &mut Context<'y>) -> Poll<T> {
-        match self.0.resume(cx.waker().into()) {
+        match self.0.resume(NonNull::from(cx).cast()) {
             CoroutineState::Yielded(()) => Poll::Pending,
             CoroutineState::Complete(output) => Poll::Ready(output),
         }
@@ -84,11 +84,10 @@ pub trait AsymWait: IntoFuture + Sized {
     {
         let mut future = core::pin::pin!(self.into_future());
         loop {
-            // SAFETY: `cx.waker` remains valid until `cx.y.yield_()`.
-            let mut ac = Context::from_waker(unsafe { cx.waker.as_ref() });
-            match future.as_mut().poll(&mut ac) {
+            // SAFETY: `cx.task_cx` remains valid until `cx.y.yield_()`.
+            match future.as_mut().poll(unsafe { cx.task_cx.as_mut() }) {
                 Poll::Ready(output) => break output,
-                Poll::Pending => cx.waker = cx.y.yield_(()),
+                Poll::Pending => cx.task_cx = cx.y.yield_(()),
             }
         }
     }
@@ -147,7 +146,7 @@ impl<'a, T, F: FnOnce(AsymContext<'_>) -> T + Send> IntoFuture for AsymBuilder<'
 #[cfg(feature = "std")]
 pub fn sync<'a, T: 'a>(
     func: impl FnOnce() -> T + Send + 'a,
-) -> AsymBuilder<'a, T, impl FnOnce(AsymContext<'_>) -> T> {
+) -> AsymBuilder<'a, T, impl FnOnce(AsymContext<'_>) -> T + Send + 'a> {
     sync_with(|cx| {
         // SAFETY: `cx` will be unset when the closure goes out of scope.
         let cx =
@@ -183,26 +182,17 @@ mod block_on {
         pin::Pin,
         task::{Context, Poll, Waker},
     };
-    use std::{sync::Arc, task::Wake, thread, thread_local};
+    use std::thread_local;
+
+    use parking::Parker;
 
     pub fn block_on<T>(mut future: Pin<&mut impl Future<Output = T>>) -> T {
-        struct WakerFn<F>(F);
-
-        impl<F: Fn() + Send + Sync + 'static> Wake for WakerFn<F> {
-            fn wake(self: Arc<Self>) {
-                (self.0)();
-            }
-
-            fn wake_by_ref(self: &Arc<Self>) {
-                (self.0)();
-            }
-        }
-
         thread_local! {
             // Cached waker for efficiency.
-            static CACHE: RefCell<Waker> = RefCell::new({
-                let thread = thread::current();
-                Arc::new(WakerFn(move || thread.unpark())).into()
+            static CACHE: RefCell<(Parker, Waker)> = RefCell::new({
+                let parker = Parker::new();
+                let unparker = parker.unparker();
+                (parker, unparker.into())
             });
         }
 
@@ -210,13 +200,13 @@ mod block_on {
         //
         // This function won't be called nestedly, so we don't need to
         // `try_borrow_mut`.
-        CACHE.with_borrow_mut(|waker| {
+        CACHE.with_borrow_mut(|(parker, waker)| {
             let cx = &mut Context::from_waker(waker);
             // Keep polling until the future is ready.
             loop {
                 match future.as_mut().poll(cx) {
                     Poll::Ready(output) => return output,
-                    Poll::Pending => thread::park(),
+                    Poll::Pending => parker.park(),
                 }
             }
         })

@@ -6,7 +6,7 @@ version = "0.1.0"
 [features]
 asym = []
 default = ["std", "asym", "sym"]
-std = ["unico-ful/std"]
+std = ["unico-ful/std", "dep:parking"]
 sym = []
 unwind = ["unico-ful/unwind"]
 
@@ -18,3 +18,4 @@ unico-stack = {path = "../stack", default-features = false}
 # External crates
 bevy_utils_proc_macros = "0"
 spin = "0.9"
+parking = {version = "2.2", optional = true}

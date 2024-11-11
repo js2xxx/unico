@@ -242,6 +242,7 @@ name = "unico-async"
 version = "0.1.0"
 dependencies = [
  "bevy_utils_proc_macros",
+ "parking",
  "spin",
  "unico-context",
  "unico-ful",

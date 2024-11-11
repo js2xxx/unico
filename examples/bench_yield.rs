@@ -14,24 +14,26 @@ global_stack_allocator!(Global);
 
 #[inline(never)]
 fn test(times: u32) -> Duration {
-    let start = Instant::now();
-    spin_on(black_box(async {
+    let synced = spin_on(black_box(async {
         sync(|| {
+            yield_now().wait();
+            let start = Instant::now();
             for _ in 0..times {
                 yield_now().wait();
             }
+            Instant::now().signed_duration_since(start) / times
         })
-        .await;
+        .await
     }));
-    let synced = Instant::now().signed_duration_since(start) / times;
 
-    let start = Instant::now();
-    spin_on(black_box(async {
+    let direct = spin_on(black_box(async {
+        yield_now().await;
+        let start = Instant::now();
         for _ in 0..times {
             yield_now().await;
         }
+        Instant::now().signed_duration_since(start) / times
     }));
-    let direct = Instant::now().signed_duration_since(start) / times;
 
     synced - direct
 }
