@@ -16,7 +16,7 @@ use unico_stack::{Global, Stack};
 #[cfg(any(feature = "unwind", feature = "std"))]
 use crate::unwind::*;
 use crate::{
-    sym::{AbortHook, Co, PanicHook},
+    sym::{handle_exit, AbortHook, Co, PanicHook},
     Build, BuildUnchecked, Builder, NewError,
 };
 
@@ -137,10 +137,7 @@ where
                     c = complete;
                     Payload::<Y>::Complete(ptr::from_ref(&c).cast())
                 }
-                // `handle_exit` is not allowed here because the caller of this coroutine
-                // must receive the yielding result but `handle_exit` bypass the
-                // assignment.
-                Err(payload) => Payload::Panicked(payload),
+                Err(payload) => Payload::Panicked(handle_exit(payload)),
             };
             #[cfg(not(any(feature = "unwind", feature = "std")))]
             let y = {
@@ -243,5 +240,12 @@ mod tests {
     #[should_panic = "What the fuck?"]
     fn panicked() {
         r#gen::<_, _, (), _>(|_, _| panic!("What the fuck?")).resume(());
+    }
+
+    #[test]
+    fn destruct() {
+        let mut g = r#gen(|y, ()| y.yield_(()));
+        assert!(matches!(g.resume(()), CoroutineState::Yielded(())));
+        drop(g);
     }
 }
