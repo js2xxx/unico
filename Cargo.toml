@@ -19,9 +19,15 @@ unico-ful = {path = "ful", default-features = false}
 unico-stack = {path = "stack", default-features = false}
 
 [dev-dependencies]
+criterion = {version = "0.5", features = ["async_tokio"]}
 futures-lite = "2.4"
 spin_on = "0.1"
 time = "0.3"
+tokio = {version = "1.41", features = ["full"]}
+
+[[bench]]
+harness = false
+name = "basic"
 
 [workspace]
 members = [
