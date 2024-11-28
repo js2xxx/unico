@@ -17,8 +17,8 @@ use core::{
 
 use bevy_utils_proc_macros::all_tuples;
 use unico_ful::{
-    sym::{Co, PanicHook},
     Builder, NewError,
+    sym::{Co, PanicHook},
 };
 use unico_stack::Stack;
 

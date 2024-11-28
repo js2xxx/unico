@@ -1,7 +1,20 @@
-[package]
-edition = "2021"
-name = "unico"
+[workspace]
+members = [
+  "async",
+  "context",
+  "ful",
+  "stack",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
 version = "0.1.0"
+
+[package]
+edition.workspace = true
+name = "unico"
+version.workspace = true
 
 [features]
 asym = ["unico-async/asym"]
@@ -20,6 +33,7 @@ unico-stack = {path = "stack", default-features = false}
 
 [dev-dependencies]
 criterion = {version = "0.5", features = ["async_tokio"]}
+ferroc = {git = "https://github.com/js2xxx/ferroc.git"}
 futures-lite = "2.4"
 spin_on = "0.1"
 time = "0.3"
@@ -29,11 +43,3 @@ tokio = {version = "1.41", features = ["full"]}
 harness = false
 name = "basic"
 
-[workspace]
-members = [
-  "async",
-  "context",
-  "ful",
-  "stack",
-]
-resolver = "2"

@@ -16,8 +16,8 @@ use unico_stack::{Global, Stack};
 #[cfg(any(feature = "unwind", feature = "std"))]
 use crate::unwind::*;
 use crate::{
-    sym::{handle_exit, AbortHook, Co, PanicHook},
     Build, BuildUnchecked, Builder, NewError,
+    sym::{AbortHook, Co, PanicHook, handle_exit},
 };
 
 enum Payload<Y> {

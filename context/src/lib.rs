@@ -192,7 +192,7 @@ pub unsafe fn resume_with(cx: NonNull<()>, data: *mut (), map: Map<()>) -> Trans
 #[allow_internal_unstable(allocator_api)]
 macro_rules! global_resumer {
     ($t:path) => {
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         #[doc(hidden)]
         unsafe fn __rust_unico_context_new(
             stack: core::ptr::NonNull<u8>,
@@ -210,7 +210,7 @@ macro_rules! global_resumer {
             .map_err(|_| core::alloc::AllocError)
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         #[doc(hidden)]
         unsafe fn __rust_unico_context_resume(
             cx: core::ptr::NonNull<()>,
@@ -222,7 +222,7 @@ macro_rules! global_resumer {
             }
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         #[doc(hidden)]
         unsafe fn __rust_unico_context_resume_with(
             cx: core::ptr::NonNull<()>,

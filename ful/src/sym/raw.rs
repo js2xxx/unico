@@ -12,7 +12,7 @@ use core::{
 use unico_context::{self as cx, Transfer};
 
 pub use self::panicking::*;
-use super::{layout::extend, Co, NewError, Stack};
+use super::{Co, NewError, Stack, layout::extend};
 #[cfg(any(feature = "unwind", feature = "std"))]
 use crate::unwind;
 
@@ -75,7 +75,6 @@ impl<F, P: PanicHook> RawCo<F, P> {
 impl<F, P> RawCo<F, P>
 where
     F: FnOnce(Option<Co>) -> Co,
-
     P: PanicHook,
 {
     /// # Safety
@@ -86,7 +85,8 @@ where
         panic_hook: P,
         func: F,
     ) -> Result<Co, NewError> {
-        Self::new_on_imp(stack, panic_hook, func, Self::entry::<false>)
+        // SAFETY: The safety requirements is the same.
+        unsafe { Self::new_on_imp(stack, panic_hook, func, Self::entry::<false>) }
             .map(Option::unwrap)
     }
 
@@ -95,7 +95,8 @@ where
         panic_hook: P,
         func: F,
     ) -> Result<Option<Co>, NewError> {
-        Self::new_on_imp(stack, panic_hook, func, Self::entry::<true>)
+        // SAFETY: The safety requirements is the same.
+        unsafe { Self::new_on_imp(stack, panic_hook, func, Self::entry::<true>) }
     }
 
     /// # Safety
@@ -156,7 +157,6 @@ where
 impl<F, P> RawCo<F, P>
 where
     F: FnOnce(Option<Co>) -> Co,
-
     P: PanicHook,
 {
     /// # Safety

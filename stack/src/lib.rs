@@ -235,7 +235,7 @@ unsafe impl StackAllocator for Global {
 #[macro_export]
 macro_rules! global_stack_allocator {
     ($name:path) => {
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         #[doc(hidden)]
         unsafe fn __rust_unico_allocate_stack(
             layout: core::alloc::Layout,

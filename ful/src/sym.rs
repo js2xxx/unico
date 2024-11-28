@@ -14,7 +14,7 @@ use unico_context as cx;
 use unico_context::Transfer;
 use unico_stack::{Global, Stack};
 
-pub use self::raw::{enter_root, AbortHook, PanicHook};
+pub use self::raw::{AbortHook, PanicHook, enter_root};
 use crate::{Build, BuildUnchecked, Builder, NewError};
 
 /// A continuation of the current control flow.

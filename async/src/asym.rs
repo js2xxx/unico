@@ -11,9 +11,9 @@ use core::{
 };
 
 use unico_ful::{
+    Build, BuildUnchecked, Builder, NewError,
     asym::{Gn, YieldHandle},
     sym::PanicHook,
-    Build, BuildUnchecked, Builder, NewError,
 };
 use unico_stack::Stack;
 

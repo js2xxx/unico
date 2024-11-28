@@ -1,9 +1,9 @@
 use unico_stack::{Global, Stack};
 
 use crate::{
+    NewError,
     asym::{Gn, YieldHandle},
     sym::{AbortHook, Co, PanicHook},
-    NewError,
 };
 
 /// The generic builder for the initialization of some coroutine.

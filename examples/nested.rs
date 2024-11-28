@@ -4,7 +4,7 @@ use std::{alloc::Global, io::Read};
 
 use futures_lite::{AsyncRead, AsyncReadExt};
 use spin_on::spin_on;
-use unico::asym::{sync, AsymWait};
+use unico::asym::{AsymWait, sync};
 use unico_context::{boost::Boost, global_resumer};
 use unico_stack::global_stack_allocator;
 

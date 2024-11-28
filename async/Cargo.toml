@@ -1,7 +1,7 @@
 [package]
-edition = "2021"
+edition.workspace = true
 name = "unico-async"
-version = "0.1.0"
+version.workspace = true
 
 [features]
 asym = []
@@ -17,5 +17,5 @@ unico-ful = {path = "../ful", default-features = false}
 unico-stack = {path = "../stack", default-features = false}
 # External crates
 bevy_utils_proc_macros = "0"
-spin = "0.9"
 parking = {version = "2.2", optional = true}
+spin = "0.9"

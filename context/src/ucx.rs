@@ -7,7 +7,7 @@ use std::{boxed::Box, io::Error as IoError};
 
 use libc::ucontext_t;
 
-use crate::{stack_top, Entry, Map, Resume};
+use crate::{Entry, Map, Resume, stack_top};
 
 type Transfer = crate::Transfer<ucontext_t>;
 

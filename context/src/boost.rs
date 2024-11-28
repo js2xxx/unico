@@ -1,6 +1,6 @@
 use core::{mem, ptr::NonNull};
 
-use crate::{stack_top, Entry, Map, Resume};
+use crate::{Entry, Map, Resume, stack_top};
 
 const CONTEXT_SIZE: usize = include!(concat!(env!("OUT_DIR"), "/context_size.txt"));
 const CONTEXT_LEN: usize = CONTEXT_SIZE / mem::size_of::<usize>();

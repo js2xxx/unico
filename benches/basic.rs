@@ -1,18 +1,16 @@
-#![feature(allocator_api)]
+use std::future::IntoFuture;
 
-use std::{alloc::Global, future::IntoFuture};
-
-use criterion::{async_executor::AsyncExecutor, black_box, Criterion};
+use criterion::{Criterion, async_executor::AsyncExecutor, black_box};
 use spin_on::spin_on;
 use tokio::runtime::Runtime;
 use unico::{
-    asym::{sync, AsymWait},
+    asym::{AsymWait, sync},
     context::{boost::Boost, global_resumer},
     stack::global_stack_allocator,
 };
 
 global_resumer!(Boost);
-global_stack_allocator!(Global);
+global_stack_allocator!(ferroc::Ferroc);
 
 struct SpinOnExec;
 
@@ -82,6 +80,6 @@ fn main() {
         .enable_all()
         .build()
         .unwrap();
-    // creation(&mut c, &rt);
+    creation(&mut c, &rt);
     yielding(&mut c, &rt);
 }

@@ -1,11 +1,7 @@
 use core::alloc::Layout;
 
 const fn max(a: usize, b: usize) -> usize {
-    if a > b {
-        a
-    } else {
-        b
-    }
+    if a > b { a } else { b }
 }
 
 pub const fn extend(layout: Layout, next: Layout) -> Option<(Layout, usize)> {

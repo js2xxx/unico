@@ -1,7 +1,7 @@
 #![no_std]
 #![deny(future_incompatible)]
 #![deny(rust_2018_idioms)]
-// #![deny(rust_2024_compatibility)]
+#![deny(rust_2024_compatibility)]
 #![deny(trivial_casts)]
 #![deny(trivial_numeric_casts)]
 #![feature(alloc_layout_extra)]
