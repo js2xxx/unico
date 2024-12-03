@@ -130,15 +130,46 @@ where
     marker: PhantomData<&'a ()>,
 }
 
+impl<'a, T, F: FnOnce(AsymContext<'_>) -> T + Send> AsymBuilder<'a, T, F> {
+    /// Tries to build a stackful future.
+    pub fn try_into_future<S, P>(self) -> Result<Asym<'a, T>, NewError>
+    where
+        S: Into<Stack>,
+        P: PanicHook,
+    {
+        self.try_into_future_with(Builder::new())
+    }
+
+    /// Builds a stackful future with a specified builder configuration.
+    pub fn into_future_with<S, P>(self, builder: Builder<S, P>) -> Asym<'a, T>
+    where
+        S: Into<Stack>,
+        P: PanicHook,
+    {
+        self.try_into_future_with(builder)
+            .expect("failed to build a stackful future")
+    }
+
+    /// Tries to build a stackful future with a specified builder configuration.
+    pub fn try_into_future_with<S, P>(
+        self,
+        builder: Builder<S, P>,
+    ) -> Result<Asym<'a, T>, NewError>
+    where
+        S: Into<Stack>,
+        P: PanicHook,
+    {
+        builder.build(self.func)
+    }
+}
+
 impl<'a, T, F: FnOnce(AsymContext<'_>) -> T + Send> IntoFuture for AsymBuilder<'a, T, F> {
     type Output = T;
 
     type IntoFuture = Asym<'a, T>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Builder::new()
-            .build(self.func)
-            .expect("failed to build a stackful future")
+        self.into_future_with(Builder::new())
     }
 }
 
