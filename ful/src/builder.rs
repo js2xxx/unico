@@ -285,7 +285,8 @@ where
     unsafe { builder.callcc_unchecked(func) }.expect("failed to call/cc")
 }
 
-/// Create a stackful generator, a.k.a. an asymmetric coroutine.
+/// Create a stackful generator, a.k.a. an asymmetric coroutine, on a specific
+/// stack.
 ///
 /// This structure also implements [`core::ops::Coroutine`] trait.
 pub fn gen_on<'a, S, F, C, Y, R>(stack: S, func: F) -> Gn<'a, C, Y, R>
@@ -299,8 +300,7 @@ where
         .expect("failed to create a generator")
 }
 
-/// Create a stackful generator, a.k.a. an asymmetric coroutine, on a specific
-/// stack.
+/// Create a stackful generator, a.k.a. an asymmetric coroutine.
 ///
 /// This structure also implements [`core::ops::Coroutine`] trait.
 pub fn r#gen<'a, F, C, Y, R>(func: F) -> Gn<'a, C, Y, R>
