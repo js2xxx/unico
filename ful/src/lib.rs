@@ -6,7 +6,6 @@
 #![deny(trivial_numeric_casts)]
 #![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
-#![feature(const_alloc_layout)]
 #![feature(coroutine_trait)]
 #![feature(coroutines)]
 
