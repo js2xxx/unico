@@ -68,7 +68,7 @@ where
 impl<T> Future for Asym<'_, T> {
     type Output = T;
 
-    fn poll<'x, 'y>(mut self: Pin<&'x mut Self>, cx: &mut Context<'y>) -> Poll<T> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
         match self.0.resume(NonNull::from(cx).cast()) {
             CoroutineState::Yielded(()) => Poll::Pending,
             CoroutineState::Complete(output) => Poll::Ready(output),
