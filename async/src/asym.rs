@@ -208,7 +208,6 @@ impl Drop for SetCxGuard {
 #[cfg(feature = "std")]
 mod block_on {
     use core::{
-        cell::RefCell,
         future::Future,
         pin::Pin,
         task::{Context, Poll, Waker},
@@ -220,18 +219,15 @@ mod block_on {
     pub fn block_on<T>(mut future: Pin<&mut impl Future<Output = T>>) -> T {
         thread_local! {
             // Cached waker for efficiency.
-            static CACHE: RefCell<(Parker, Waker)> = RefCell::new({
+            static CACHE: (Parker, Waker) = {
                 let parker = Parker::new();
                 let unparker = parker.unparker();
                 (parker, unparker.into())
-            });
+            };
         }
 
         // Grab the cached waker.
-        //
-        // This function won't be called nestedly, so we don't need to
-        // `try_borrow_mut`.
-        CACHE.with_borrow_mut(|(parker, waker)| {
+        CACHE.with(|(parker, waker)| {
             let cx = &mut Context::from_waker(waker);
             // Keep polling until the future is ready.
             loop {
