@@ -219,15 +219,14 @@ mod block_on {
     pub fn block_on<T>(mut future: Pin<&mut impl Future<Output = T>>) -> T {
         thread_local! {
             // Cached waker for efficiency.
-            static CACHE: (Parker, Waker) = {
+            static CACHE: (Waker, Parker) = {
                 let parker = Parker::new();
-                let unparker = parker.unparker();
-                (parker, unparker.into())
+                (parker.unparker().into(), parker)
             };
         }
 
         // Grab the cached waker.
-        CACHE.with(|(parker, waker)| {
+        CACHE.with(|(waker, parker)| {
             let cx = &mut Context::from_waker(waker);
             // Keep polling until the future is ready.
             loop {
