@@ -6,7 +6,7 @@ const fn max(a: usize, b: usize) -> usize {
 
 pub const fn extend(layout: Layout, next: Layout) -> Option<(Layout, usize)> {
     let new_align = max(layout.align(), next.align());
-    let pad = layout.padding_needed_for(next.align());
+    let pad = layout.padding_needed_for(next.alignment());
 
     let offset = ct!(layout.size().checked_add(pad));
     let new_size = ct!(offset.checked_add(next.size()));

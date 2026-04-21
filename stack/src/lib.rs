@@ -211,7 +211,7 @@ unsafe extern "Rust" {
     ///
     /// See [`Stack::new`] for more information. All the requirements of that
     /// function should be satisfied by the implementor.
-    fn __rust_unico_allocate_stack(layout: Layout) -> Result<Stack, AllocError>;
+    unsafe fn __rust_unico_allocate_stack(layout: Layout) -> Result<Stack, AllocError>;
 }
 
 /// The global stack allocator interface (not implementation). The user should

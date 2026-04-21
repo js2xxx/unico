@@ -4,8 +4,9 @@
 #![deny(rust_2024_compatibility)]
 #![deny(trivial_casts)]
 #![deny(trivial_numeric_casts)]
-#![feature(allocator_api)]
+#![cfg_attr(test, feature(allocator_api))]
 #![feature(coroutine_trait)]
+#![feature(thread_local)]
 
 #[cfg(feature = "asym")]
 pub mod asym;

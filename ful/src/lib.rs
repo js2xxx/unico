@@ -4,10 +4,9 @@
 #![deny(rust_2024_compatibility)]
 #![deny(trivial_casts)]
 #![deny(trivial_numeric_casts)]
-#![feature(alloc_layout_extra)]
+#![feature(ptr_alignment_type)]
 #![feature(allocator_api)]
 #![feature(coroutine_trait)]
-#![feature(coroutines)]
 
 macro_rules! ct {
     ($e:expr) => {

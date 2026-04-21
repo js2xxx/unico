@@ -93,18 +93,25 @@ pub trait AsymWait: IntoFuture + Sized {
     }
 
     /// Wait on a future "synchronously".
-    #[cfg(feature = "std")]
+    ///
+    /// This function should be called in the context of an [`Asym`] created by
+    /// [`sync`]. If not, its behavior varies:
+    ///
+    /// - If `cfg(feature = "std")`, it will block the current thread until the
+    ///   future is ready.
+    /// - Otherwise, it will panic.
     fn wait(self) -> Self::Output
     where
         <Self as IntoFuture>::IntoFuture: Send,
     {
-        match CX.take() {
-            Some(cx) => {
-                let mut guard = SetCxGuard(None);
-                self.wait_with(guard.0.insert(cx))
-            }
-            None => block_on::block_on(core::pin::pin!(self.into_future())),
-        }
+        #[cfg(not(feature = "std"))]
+        let cx = CX.take().expect("cannot call `wait` outside of `sync`");
+        #[cfg(feature = "std")]
+        let Some(cx) = CX.take() else {
+            return block_on::block_on(core::pin::pin!(self.into_future()));
+        };
+        let mut guard = SetCxGuard(None);
+        self.wait_with(guard.0.insert(cx))
     }
 }
 
@@ -174,7 +181,6 @@ impl<'a, T, F: FnOnce(AsymContext<'_>) -> T + Send> IntoFuture for AsymBuilder<'
 }
 
 /// Turns a block of sync code into a future.
-#[cfg(feature = "std")]
 pub fn sync<'a, T: 'a>(
     func: impl FnOnce() -> T + Send + 'a,
 ) -> AsymBuilder<'a, T, impl FnOnce(AsymContext<'_>) -> T + Send + 'a> {
@@ -188,16 +194,12 @@ pub fn sync<'a, T: 'a>(
     })
 }
 
-#[cfg(feature = "std")]
-std::thread_local! {
-    static CX: core::cell::Cell<Option<AsymContext<'static>>>
-        = const { core::cell::Cell::new(None) };
-}
+#[thread_local]
+static CX: core::cell::Cell<Option<AsymContext<'static>>> =
+    const { core::cell::Cell::new(None) };
 
-#[cfg(feature = "std")]
 struct SetCxGuard(Option<AsymContext<'static>>);
 
-#[cfg(feature = "std")]
 impl Drop for SetCxGuard {
     fn drop(&mut self) {
         CX.set(self.0.take());
