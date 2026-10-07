@@ -6,7 +6,6 @@
 #![deny(trivial_numeric_casts)]
 #![cfg_attr(feature = "ucx", feature(new_uninit))]
 #![allow(internal_features)]
-#![feature(allocator_api)]
 #![feature(allow_internal_unstable)]
 #![feature(slice_ptr_get)]
 
@@ -130,15 +129,16 @@ fn stack_top<T>(stack: NonNull<[u8]>) -> Option<NonNull<T>> {
 
 // SAFETY: These functions are implemented by `global_resumer!`.
 unsafe extern "Rust" {
-    fn __rust_unico_context_new(
+    unsafe fn __rust_unico_context_new(
         stack: NonNull<u8>,
         stack_size: usize,
         entry: Entry<()>,
     ) -> Result<NonNull<()>, AllocError>;
 
-    fn __rust_unico_context_resume(cx: NonNull<()>, data: *mut ()) -> Transfer<()>;
+    unsafe fn __rust_unico_context_resume(cx: NonNull<()>, data: *mut ())
+    -> Transfer<()>;
 
-    fn __rust_unico_context_resume_with(
+    unsafe fn __rust_unico_context_resume_with(
         cx: NonNull<()>,
         data: *mut (),
         map: Map<()>,

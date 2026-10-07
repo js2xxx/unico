@@ -15,16 +15,21 @@ pub struct Fcx(#[allow(dead_code)] [usize; CONTEXT_LEN]);
 unsafe extern "C" {
     /// Creates a new `Context` on top of some stack.
     #[link_name = "make_fcontext"]
-    fn new_on(stack_top: NonNull<()>, size: usize, entry: Entry<Fcx>) -> NonNull<Fcx>;
+    unsafe fn new_on(
+        stack_top: NonNull<()>,
+        size: usize,
+        entry: Entry<Fcx>,
+    ) -> NonNull<Fcx>;
 
     /// Yields the execution to another `Context`.
     #[link_name = "jump_fcontext"]
-    fn resume(target: NonNull<Fcx>, data: *mut ()) -> Transfer;
+    unsafe fn resume(target: NonNull<Fcx>, data: *mut ()) -> Transfer;
 
     /// Yields the execution to another `Context` and executes a function on
     /// top of that stack.
     #[link_name = "ontop_fcontext"]
-    fn resume_with(target: NonNull<Fcx>, data: *mut (), map: Map<Fcx>) -> Transfer;
+    unsafe fn resume_with(target: NonNull<Fcx>, data: *mut (), map: Map<Fcx>)
+    -> Transfer;
 }
 
 pub type Transfer = crate::Transfer<Fcx>;

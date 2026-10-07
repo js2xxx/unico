@@ -5,7 +5,6 @@
 #![deny(trivial_casts)]
 #![deny(trivial_numeric_casts)]
 #![feature(ptr_alignment_type)]
-#![feature(allocator_api)]
 #![feature(coroutine_trait)]
 
 macro_rules! ct {
